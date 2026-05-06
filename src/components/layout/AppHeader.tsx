@@ -1,5 +1,8 @@
 import { Link } from "react-router-dom";
 import { ThemeToggle } from "./ThemeToggle";
+import { UserMenu } from "@/components/auth/UserMenu";
+import { SignInButton } from "@/components/auth/SignInButton";
+import { useAuth } from "@/lib/auth/AuthProvider";
 import { cn } from "@/lib/utils";
 
 export function AppHeader({
@@ -9,6 +12,7 @@ export function AppHeader({
   children?: React.ReactNode;
   className?: string;
 }) {
+  const { user, isLoading, configured } = useAuth();
   return (
     <header
       className={cn(
@@ -24,6 +28,7 @@ export function AppHeader({
       </Link>
       <div className="flex flex-1 items-center gap-2 px-1">{children}</div>
       <ThemeToggle />
+      {configured && !isLoading && (user ? <UserMenu /> : <SignInButton />)}
     </header>
   );
 }

@@ -1,6 +1,9 @@
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Dashboard } from "@/routes/Dashboard";
+import { Login } from "@/routes/Login";
+import { AuthCallback } from "@/routes/AuthCallback";
+import { AuthProvider } from "@/lib/auth/AuthProvider";
 import { ThemeProvider } from "@/lib/theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -23,22 +26,26 @@ function EditorFallback() {
 export function App() {
   return (
     <ThemeProvider defaultTheme="dark">
-      <TooltipProvider delayDuration={150}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route
-              path="/s/:id"
-              element={
-                <Suspense fallback={<EditorFallback />}>
-                  <SchemaEditor />
-                </Suspense>
-              }
-            />
-          </Routes>
-        </BrowserRouter>
-        <Toaster />
-      </TooltipProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <TooltipProvider delayDuration={150}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route
+                path="/s/:id"
+                element={
+                  <Suspense fallback={<EditorFallback />}>
+                    <SchemaEditor />
+                  </Suspense>
+                }
+              />
+              <Route path="/login" element={<Login />} />
+              <Route path="/auth/callback" element={<AuthCallback />} />
+            </Routes>
+            <Toaster />
+          </TooltipProvider>
+        </AuthProvider>
+      </BrowserRouter>
     </ThemeProvider>
   );
 }
