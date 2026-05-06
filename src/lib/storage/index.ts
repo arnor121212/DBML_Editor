@@ -13,10 +13,44 @@ import { localBackend } from "./local";
 import { cloudBackend } from "./cloud";
 import type { StorageBackend } from "./types";
 
-export type { SchemaRecord, SchemaSummary, StorageBackend } from "./types";
+export type {
+  SchemaRecord,
+  SchemaSummary,
+  StorageBackend,
+  PublicRole,
+  CollaboratorRole,
+  MyRole,
+} from "./types";
 export { makeId } from "./types";
 export { localBackend, listLocalRecords, clearLocal } from "./local";
 export { cloudBackend, uploadLocalRecords } from "./cloud";
+
+/**
+ * Cloud-or-local lookup for a single schema. The primary backend (chosen by
+ * auth state) is tried first; if it returns nothing, the other backend is
+ * tried so anonymous users can still open shared cloud links by URL, and
+ * signed-in users can still open old un-migrated local schemas.
+ */
+import type { SchemaRecord } from "./types";
+
+export async function loadSchema(
+  id: string,
+): Promise<SchemaRecord | undefined> {
+  const primary = activeBackend;
+  try {
+    const rec = await primary.get(id);
+    if (rec) return rec;
+  } catch {
+    /* fall through */
+  }
+  const other = primary === localBackend ? cloudBackend : localBackend;
+  if (other === cloudBackend && !supabase) return undefined;
+  try {
+    return await other.get(id);
+  } catch {
+    return undefined;
+  }
+}
 
 let activeBackend: StorageBackend = localBackend;
 

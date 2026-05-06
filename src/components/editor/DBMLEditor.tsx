@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import Editor, { useMonaco, type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
+import { MonacoBinding } from "y-monaco";
 import {
   DBML_LANGUAGE_ID,
   defineDbmlThemes,
@@ -9,11 +10,19 @@ import {
 import { useTheme } from "@/lib/theme";
 import { useSchemaStore } from "@/store/schemaStore";
 import { debounce } from "@/lib/utils";
+import type { CollabSession } from "@/lib/collab/CollabSession";
 
-export function DBMLEditor() {
+interface Props {
+  /** When provided, Monaco is bound to the session's Y.Text via y-monaco
+   *  and we skip the local debounced setDbml path entirely. */
+  session?: CollabSession | null;
+}
+
+export function DBMLEditor({ session }: Props) {
   const monaco = useMonaco();
   const { resolved } = useTheme();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const bindingRef = useRef<MonacoBinding | null>(null);
   /**
    * Tracks the last value the user typed (or that we synced to the model).
    * If the store's `dbml` differs from this, the change came from outside
@@ -23,6 +32,7 @@ export function DBMLEditor() {
   const lastSyncedRef = useRef<string>("");
   const dbml = useSchemaStore((s) => s.dbml);
   const errors = useSchemaStore((s) => s.errors);
+  const canEdit = useSchemaStore((s) => s.canEdit);
   const setDbml = useSchemaStore((s) => s.setDbml);
   const themeName = resolved === "dark" ? "schemasync-dark" : "schemasync-light";
 
@@ -63,8 +73,10 @@ export function DBMLEditor() {
   }, [monaco, errors]);
 
   // Sync external dbml changes (e.g. Load example) into the model without
-  // resetting the cursor on user-driven edits.
+  // resetting the cursor on user-driven edits. Skipped when a collab session
+  // owns the model — y-monaco mediates external updates through Y.Text.
   useEffect(() => {
+    if (session) return;
     if (!editorRef.current) return;
     if (dbml === lastSyncedRef.current) return;
     const model = editorRef.current.getModel();
@@ -75,7 +87,34 @@ export function DBMLEditor() {
     }
     editorRef.current.setValue(dbml);
     lastSyncedRef.current = dbml;
-  }, [dbml]);
+  }, [dbml, session]);
+
+  // y-monaco binding lifecycle. Bind once we have both an editor instance
+  // and a collab session; tear down on either change or unmount.
+  //
+  // Construct the binding BEFORE writing anything to Y.Text or the model.
+  // MonacoBinding reconciles the two on first attach (Y.Text wins). Then,
+  // if Y.Text is still empty (we're the very first peer ever), seed it
+  // from the model's current value so the doc isn't blank for everyone.
+  useEffect(() => {
+    if (!session || !editorRef.current) return;
+    const model = editorRef.current.getModel();
+    if (!model) return;
+    const binding = new MonacoBinding(
+      session.text,
+      model,
+      new Set([editorRef.current]),
+      session.provider.awareness,
+    );
+    bindingRef.current = binding;
+    if (session.text.length === 0 && model.getValue().length > 0) {
+      session.setText(model.getValue());
+    }
+    return () => {
+      binding.destroy();
+      bindingRef.current = null;
+    };
+  }, [session]);
 
   const handleMount = useCallback<OnMount>(
     (ed, m) => {
@@ -91,10 +130,13 @@ export function DBMLEditor() {
   const handleChange = useCallback(
     (value: string | undefined) => {
       if (typeof value !== "string") return;
+      // When y-monaco is in charge, the Y.Text observer in useSchemaCollab
+      // is already debouncing the change into the store — don't double-emit.
+      if (session) return;
       lastSyncedRef.current = value;
       debouncedSet(value);
     },
-    [debouncedSet],
+    [debouncedSet, session],
   );
 
   return (
@@ -107,6 +149,8 @@ export function DBMLEditor() {
         onMount={handleMount}
         onChange={handleChange}
         options={{
+          readOnly: !canEdit,
+          readOnlyMessage: { value: "You're viewing in read-only mode." },
           fontFamily: "JetBrains Mono, ui-monospace, monospace",
           fontLigatures: true,
           fontSize: 13,

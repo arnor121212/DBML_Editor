@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Dashboard } from "@/routes/Dashboard";
 import { Login } from "@/routes/Login";
 import { AuthCallback } from "@/routes/AuthCallback";
+import { AcceptInvite } from "@/routes/AcceptInvite";
 import { AuthProvider } from "@/lib/auth/AuthProvider";
 import { ThemeProvider } from "@/lib/theme";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -41,6 +42,7 @@ export function App() {
               />
               <Route path="/login" element={<Login />} />
               <Route path="/auth/callback" element={<AuthCallback />} />
+              <Route path="/invite/:token" element={<AcceptInvite />} />
             </Routes>
             <Toaster />
           </TooltipProvider>
