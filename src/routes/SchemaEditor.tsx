@@ -4,6 +4,10 @@ import {
   ArrowLeft,
   CheckCircle2,
   Code2,
+  PanelLeft,
+  PanelLeftClose,
+  PanelRight,
+  PanelRightClose,
   Pencil,
   Table as TableIcon,
 } from "lucide-react";
@@ -11,14 +15,31 @@ import { AppHeader } from "@/components/layout/AppHeader";
 import { SplitPane } from "@/components/layout/SplitPane";
 import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
+import { AiPanel } from "@/components/editor/AiPanel";
 import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useSchemaStore } from "@/store/schemaStore";
 import { useStorage } from "@/lib/storage";
+import { useAuth } from "@/lib/auth/AuthProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { toast } from "sonner";
-import { formatError } from "@/lib/utils";
+import { cn, formatError } from "@/lib/utils";
+
+const STORAGE_EDITOR_OPEN = "schemasync.panel.editor";
+const STORAGE_AI_OPEN = "schemasync.panel.ai";
+
+function readBool(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+  const v = window.localStorage.getItem(key);
+  if (v === null) return fallback;
+  return v === "1";
+}
 
 export function SchemaEditor() {
   const { id } = useParams<{ id: string }>();
@@ -33,6 +54,35 @@ export function SchemaEditor() {
   const setName = useSchemaStore((s) => s.setName);
 
   const [missing, setMissing] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(() =>
+    readBool(STORAGE_EDITOR_OPEN, true),
+  );
+  const [aiOpen, setAiOpen] = useState(() => readBool(STORAGE_AI_OPEN, false));
+  const { user, configured, isLoading: authLoading } = useAuth();
+  const aiAvailable = configured && !authLoading && !!user;
+  const aiTooltip = !configured
+    ? "AI generation requires Supabase configuration."
+    : !user
+      ? "Sign in to use AI generation."
+      : aiOpen
+        ? "Hide AI panel"
+        : "Show AI panel";
+
+  function toggleEditor() {
+    setEditorOpen((v) => {
+      const next = !v;
+      window.localStorage.setItem(STORAGE_EDITOR_OPEN, next ? "1" : "0");
+      return next;
+    });
+  }
+  function toggleAi() {
+    if (!aiAvailable) return;
+    setAiOpen((v) => {
+      const next = !v;
+      window.localStorage.setItem(STORAGE_AI_OPEN, next ? "1" : "0");
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +126,80 @@ export function SchemaEditor() {
     );
   }
 
+  const editorPane = (
+    <div className="flex h-full min-h-0 flex-col border-r border-border bg-surface">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[12px] text-muted-foreground">
+        <Code2 className="size-3.5" />
+        <span>schema.dbml</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        {loaded ? (
+          <DBMLEditor />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Loading…
+          </div>
+        )}
+      </div>
+      <ErrorBar />
+    </div>
+  );
+
+  const diagramPane = (
+    <div className="h-full bg-background">
+      {loaded && <DiagramCanvas />}
+    </div>
+  );
+
+  const aiPane = <AiPanel onClose={toggleAi} />;
+
+  let main: React.ReactNode;
+  if (editorOpen && aiOpen) {
+    main = (
+      <SplitPane
+        storageKey="schemasync.split.editor"
+        initial={32}
+        min={20}
+        max={55}
+        left={editorPane}
+        right={
+          <SplitPane
+            storageKey="schemasync.split.ai"
+            initial={62}
+            min={42}
+            max={82}
+            left={diagramPane}
+            right={aiPane}
+          />
+        }
+      />
+    );
+  } else if (editorOpen) {
+    main = (
+      <SplitPane
+        storageKey="schemasync.split.editor"
+        initial={35}
+        min={22}
+        max={65}
+        left={editorPane}
+        right={diagramPane}
+      />
+    );
+  } else if (aiOpen) {
+    main = (
+      <SplitPane
+        storageKey="schemasync.split.ai"
+        initial={68}
+        min={45}
+        max={82}
+        left={diagramPane}
+        right={aiPane}
+      />
+    );
+  } else {
+    main = diagramPane;
+  }
+
   return (
     <TooltipProvider delayDuration={120}>
       <div className="flex h-full min-h-0 flex-col">
@@ -105,39 +229,47 @@ export function SchemaEditor() {
               </span>
             )}
           </span>
+          <div className="ml-auto flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  onClick={toggleEditor}
+                  aria-pressed={editorOpen}
+                  aria-label={editorOpen ? "Hide editor" : "Show editor"}
+                >
+                  {editorOpen ? <PanelLeftClose /> : <PanelLeft />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {editorOpen ? "Hide editor" : "Show editor"}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={aiAvailable ? -1 : 0}>
+                  <Button
+                    size="icon-sm"
+                    variant={aiOpen ? "soft" : "ghost"}
+                    onClick={toggleAi}
+                    disabled={!aiAvailable}
+                    aria-pressed={aiOpen}
+                    aria-label={aiOpen ? "Hide AI panel" : "Show AI panel"}
+                    className={cn(
+                      aiOpen && "shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-primary)_25%,transparent)]",
+                    )}
+                  >
+                    {aiOpen ? <PanelRightClose /> : <PanelRight />}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{aiTooltip}</TooltipContent>
+            </Tooltip>
+          </div>
         </AppHeader>
 
-        <main className="min-h-0 flex-1">
-          <SplitPane
-            storageKey="schemasync.split"
-            initial={35}
-            min={22}
-            max={65}
-            left={
-              <div className="flex h-full min-h-0 flex-col border-r border-border bg-surface">
-                <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[12px] text-muted-foreground">
-                  <Code2 className="size-3.5" />
-                  <span>schema.dbml</span>
-                </div>
-                <div className="min-h-0 flex-1">
-                  {loaded ? (
-                    <DBMLEditor />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                      Loading…
-                    </div>
-                  )}
-                </div>
-                <ErrorBar />
-              </div>
-            }
-            right={
-              <div className="h-full bg-background">
-                {loaded && <DiagramCanvas />}
-              </div>
-            }
-          />
-        </main>
+        <main className="min-h-0 flex-1">{main}</main>
       </div>
     </TooltipProvider>
   );
