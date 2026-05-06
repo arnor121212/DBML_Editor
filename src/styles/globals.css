@@ -1,0 +1,341 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@xyflow/react/dist/style.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   Design tokens — deep slate, electric blue, soft purple
+   ============================================================ */
+:root {
+  --background: oklch(0.985 0.002 240);
+  --foreground: oklch(0.18 0.02 250);
+
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.97 0.005 240);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.02 250);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.02 250);
+
+  --primary: oklch(0.62 0.19 252);
+  --primary-foreground: oklch(0.99 0.005 240);
+
+  --secondary: oklch(0.95 0.008 250);
+  --secondary-foreground: oklch(0.22 0.02 250);
+
+  --muted: oklch(0.95 0.008 250);
+  --muted-foreground: oklch(0.5 0.02 250);
+
+  --accent: oklch(0.95 0.008 250);
+  --accent-foreground: oklch(0.22 0.02 250);
+
+  --destructive: oklch(0.62 0.22 25);
+  --destructive-foreground: oklch(0.99 0.005 240);
+
+  --warning: oklch(0.78 0.16 80);
+  --success: oklch(0.7 0.18 155);
+  --collab: oklch(0.66 0.21 295);
+
+  --border: oklch(0.9 0.008 250);
+  --input: oklch(0.92 0.008 250);
+  --ring: oklch(0.62 0.19 252);
+
+  --radius: 0.625rem;
+
+  /* Type-system color hints */
+  --type-int: oklch(0.66 0.18 245);
+  --type-string: oklch(0.7 0.16 155);
+  --type-bool: oklch(0.66 0.21 295);
+  --type-time: oklch(0.75 0.16 65);
+  --type-json: oklch(0.7 0.18 340);
+  --type-uuid: oklch(0.7 0.14 200);
+  --type-decimal: oklch(0.7 0.17 120);
+  --type-default: oklch(0.6 0.02 250);
+}
+
+.dark {
+  --background: oklch(0.155 0.012 250);
+  --foreground: oklch(0.96 0.005 240);
+
+  --surface: oklch(0.19 0.013 250);
+  --surface-2: oklch(0.225 0.014 250);
+
+  --card: oklch(0.205 0.013 250);
+  --card-foreground: oklch(0.96 0.005 240);
+
+  --popover: oklch(0.205 0.013 250);
+  --popover-foreground: oklch(0.96 0.005 240);
+
+  --primary: oklch(0.72 0.18 245);
+  --primary-foreground: oklch(0.155 0.012 250);
+
+  --secondary: oklch(0.27 0.014 250);
+  --secondary-foreground: oklch(0.96 0.005 240);
+
+  --muted: oklch(0.245 0.013 250);
+  --muted-foreground: oklch(0.68 0.014 250);
+
+  --accent: oklch(0.27 0.014 250);
+  --accent-foreground: oklch(0.96 0.005 240);
+
+  --destructive: oklch(0.62 0.22 25);
+  --destructive-foreground: oklch(0.99 0.005 240);
+
+  --warning: oklch(0.78 0.16 80);
+  --success: oklch(0.7 0.18 155);
+  --collab: oklch(0.72 0.21 295);
+
+  --border: oklch(0.3 0.014 250);
+  --input: oklch(0.3 0.014 250);
+  --ring: oklch(0.72 0.18 245);
+
+  --type-int: oklch(0.78 0.16 245);
+  --type-string: oklch(0.78 0.15 155);
+  --type-bool: oklch(0.78 0.18 295);
+  --type-time: oklch(0.82 0.14 65);
+  --type-json: oklch(0.78 0.16 340);
+  --type-uuid: oklch(0.8 0.12 200);
+  --type-decimal: oklch(0.78 0.15 120);
+  --type-default: oklch(0.7 0.014 250);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-collab: var(--collab);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-type-int: var(--type-int);
+  --color-type-string: var(--type-string);
+  --color-type-bool: var(--type-bool);
+  --color-type-time: var(--type-time);
+  --color-type-json: var(--type-json);
+  --color-type-uuid: var(--type-uuid);
+  --color-type-decimal: var(--type-decimal);
+  --color-type-default: var(--type-default);
+
+  --font-sans: "Inter", "Geist", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings:
+      "cv11" 1,
+      "ss01" 1,
+      "ss03" 1;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-primary) 35%, transparent);
+  }
+}
+
+/* ============================================================
+   Subtle background grain for the dashboard
+   ============================================================ */
+.bg-grid {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in oklab, var(--color-border) 60%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--color-border) 60%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+.bg-radial-fade {
+  background:
+    radial-gradient(
+      1200px 600px at 80% -10%,
+      color-mix(in oklab, var(--color-primary) 16%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 500px at 0% 110%,
+      color-mix(in oklab, var(--color-collab) 14%, transparent),
+      transparent 60%
+    );
+}
+
+/* ============================================================
+   React Flow theming overrides
+   ============================================================ */
+.react-flow {
+  background: var(--color-background);
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__background {
+  --bg-color: var(--color-background);
+  --dot-color: color-mix(in oklab, var(--color-border) 90%, transparent);
+}
+.react-flow__minimap {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.react-flow__minimap-mask {
+  fill: color-mix(in oklab, var(--color-background) 70%, transparent);
+}
+.react-flow__controls {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 1px 0 0 color-mix(in oklab, white 6%, transparent) inset,
+    0 4px 18px -4px rgb(0 0 0 / 0.35);
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: transparent !important;
+  border: none !important;
+  color: var(--color-foreground) !important;
+  width: 32px;
+  height: 32px;
+  border-bottom: 1px solid var(--color-border) !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--color-surface-2) !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+  max-width: 14px;
+  max-height: 14px;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__edge-path {
+  stroke: color-mix(in oklab, var(--color-muted-foreground) 70%, transparent);
+  stroke-width: 1.5;
+  transition:
+    stroke 160ms ease,
+    stroke-width 160ms ease,
+    opacity 160ms ease;
+}
+.react-flow__edge.is-highlighted .react-flow__edge-path {
+  stroke: var(--color-primary);
+  stroke-width: 2;
+}
+.react-flow__edge.is-dimmed .react-flow__edge-path {
+  opacity: 0.18;
+}
+.react-flow__node {
+  font-family: var(--font-sans);
+}
+
+/* ============================================================
+   Monaco overrides
+   ============================================================ */
+.monaco-editor,
+.monaco-editor .margin,
+.monaco-editor-background {
+  background: var(--color-surface) !important;
+}
+.monaco-editor .overflow-guard {
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   Animations
+   ============================================================ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in-up {
+  animation: fadeInUp 220ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes pulseRing {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-primary) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+
+/* ============================================================
+   Scrollbars
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--color-border) 100%, transparent)
+    transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--color-border) 100%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-muted-foreground) 60%, transparent);
+  background-clip: padding-box;
+}
