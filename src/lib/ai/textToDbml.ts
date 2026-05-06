@@ -8,10 +8,20 @@ export interface StreamDbmlOptions {
   signal?: AbortSignal;
 }
 
+export interface StreamDbmlMeta {
+  /** True when the model's response was cut off by max_tokens. */
+  truncated?: boolean;
+}
+
 export interface StreamDbmlResult {
   dbml: string | null;
   error: string | null;
+  meta?: StreamDbmlMeta;
 }
+
+/** Sentinel the Edge Function appends after content when finish_reason is
+ *  "length". Must match supabase/functions/text-to-dbml/index.ts. */
+const META_MARKER = "\n[[__SCHEMASYNC_META__]]\n";
 
 /**
  * Streams the `text-to-dbml` Edge Function. We bypass the Supabase JS client's
@@ -81,7 +91,12 @@ export async function streamDbmlFromPrompt({
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  // `accumulated` always reflects content visible to the user (pre-marker).
+  // Once the marker appears, we stop appending visible content and start
+  // collecting metadata JSON.
   let accumulated = "";
+  let metaJson = "";
+  let inMeta = false;
 
   try {
     while (true) {
@@ -89,8 +104,28 @@ export async function streamDbmlFromPrompt({
       if (done) break;
       const chunk = decoder.decode(value, { stream: true });
       if (chunk.length === 0) continue;
-      accumulated += chunk;
-      onChunk?.(chunk, accumulated);
+
+      if (inMeta) {
+        metaJson += chunk;
+        continue;
+      }
+
+      // Marker may straddle chunk boundaries — search the combined buffer.
+      const combined = accumulated + chunk;
+      const idx = combined.indexOf(META_MARKER);
+      if (idx === -1) {
+        accumulated = combined;
+        onChunk?.(chunk, accumulated);
+        continue;
+      }
+
+      // Found the sentinel: split content from meta and switch modes.
+      accumulated = combined.slice(0, idx);
+      metaJson = combined.slice(idx + META_MARKER.length);
+      inMeta = true;
+      // Push the corrected accumulated to the consumer so any partial
+      // marker text already shown gets cleaned up visually.
+      onChunk?.("", accumulated);
     }
   } catch (err) {
     if ((err as Error).name === "AbortError") {
@@ -99,11 +134,26 @@ export async function streamDbmlFromPrompt({
     return { dbml: null, error: `Stream interrupted: ${(err as Error).message}` };
   }
 
+  let meta: StreamDbmlMeta | undefined;
+  if (metaJson.trim()) {
+    try {
+      meta = JSON.parse(metaJson.trim()) as StreamDbmlMeta;
+    } catch {
+      // ignore malformed metadata; the content is still usable
+    }
+  }
+
   const final = stripFences(accumulated);
   if (!final) {
-    return { dbml: null, error: "Empty response." };
+    return {
+      dbml: null,
+      error: meta?.truncated
+        ? "Response was truncated before any content arrived."
+        : "Empty response.",
+      meta,
+    };
   }
-  return { dbml: final, error: null };
+  return { dbml: final, error: null, meta };
 }
 
 // Even with explicit "no fences" instructions, models occasionally wrap output

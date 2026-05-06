@@ -40,6 +40,18 @@ interface RequestBody {
   currentDbml?: string;
 }
 
+/** Cap on the model's output. Generous for any reasonable DBML schema while
+ *  bounding worst-case cost — gpt-5.4-mini is cheap, but uncapped output
+ *  + prompt-injection style abuse could still rack up a bill. */
+const MAX_OUTPUT_TOKENS = 12_000;
+
+/** Sentinel emitted at the very end of the response stream when OpenAI's
+ *  finish_reason is "length" (i.e. we hit MAX_OUTPUT_TOKENS). The frontend
+ *  strips this and shows a "response was truncated" banner in the turn
+ *  card. Picked to be improbable in real DBML so we don't accidentally
+ *  cut off legitimate content. */
+const META_MARKER = "\n[[__SCHEMASYNC_META__]]\n";
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -65,8 +77,8 @@ Deno.serve(async (req) => {
 
   const prompt = body.prompt?.trim();
   if (!prompt) return jsonError("Missing `prompt`.", 400);
-  if (prompt.length > 4000) {
-    return jsonError("Prompt too long (max 4000 characters).", 400);
+  if (prompt.length > 8000) {
+    return jsonError("Prompt too long (max 8000 characters).", 400);
   }
 
   const currentDbml = body.currentDbml?.trim();
@@ -90,6 +102,9 @@ Deno.serve(async (req) => {
         model: "gpt-5.4-mini",
         temperature: 0.2,
         stream: true,
+        // gpt-5.x uses max_completion_tokens; the older max_tokens is rejected
+        // ("Unsupported parameter") on these models.
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userMessage },
@@ -118,6 +133,21 @@ Deno.serve(async (req) => {
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
       let buf = "";
+      // Tracked across SSE events; emitted as a sentinel after the stream
+      // ends if the model was cut off by max_tokens.
+      let finishReason: string | null = null;
+
+      const finalize = () => {
+        if (finishReason === "length") {
+          controller.enqueue(
+            encoder.encode(
+              META_MARKER + JSON.stringify({ truncated: true }) + "\n",
+            ),
+          );
+        }
+        controller.close();
+      };
+
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -134,12 +164,14 @@ Deno.serve(async (req) => {
             if (!line.startsWith("data:")) continue;
             const data = line.slice(5).trim();
             if (data === "[DONE]") {
-              controller.close();
+              finalize();
               return;
             }
             try {
               const parsed = JSON.parse(data);
               const delta = parsed?.choices?.[0]?.delta?.content;
+              const finish = parsed?.choices?.[0]?.finish_reason;
+              if (typeof finish === "string") finishReason = finish;
               if (typeof delta === "string" && delta.length > 0) {
                 controller.enqueue(encoder.encode(delta));
               }
@@ -152,7 +184,7 @@ Deno.serve(async (req) => {
         controller.error(err);
         return;
       }
-      controller.close();
+      finalize();
     },
   });
 
