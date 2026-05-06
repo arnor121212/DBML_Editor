@@ -3,12 +3,16 @@ import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   CheckCircle2,
+  Clock,
   Code2,
+  Eye,
+  Globe,
   PanelLeft,
   PanelLeftClose,
   PanelRight,
   PanelRightClose,
   Pencil,
+  Share2,
   Table as TableIcon,
 } from "lucide-react";
 import { AppHeader } from "@/components/layout/AppHeader";
@@ -17,6 +21,9 @@ import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
 import { AiPanel } from "@/components/editor/AiPanel";
 import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
+import { ShareDialog } from "@/components/sharing/ShareDialog";
+import { HistoryDialog } from "@/components/history/HistoryDialog";
+import { PresenceStack } from "@/components/collab/PresenceStack";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,10 +31,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useSchemaStore } from "@/store/schemaStore";
-import { useStorage } from "@/lib/storage";
-import { useAuth } from "@/lib/auth/AuthProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useSchemaStore } from "@/store/schemaStore";
+import { loadSchema, type SchemaRecord } from "@/lib/storage";
+import { useAuth } from "@/lib/auth/AuthProvider";
+import { useAutoSnapshot } from "@/lib/snapshots/useAutoSnapshot";
+import { useSchemaCollab } from "@/lib/collab/useSchemaCollab";
+import { usePresence } from "@/lib/collab/usePresence";
 import { toast } from "sonner";
 import { cn, formatError } from "@/lib/utils";
 
@@ -43,7 +53,6 @@ function readBool(key: string, fallback: boolean): boolean {
 
 export function SchemaEditor() {
   const { id } = useParams<{ id: string }>();
-  const storage = useStorage();
   const loadRecord = useSchemaStore((s) => s.loadRecord);
   const reset = useSchemaStore((s) => s.reset);
   const loaded = useSchemaStore((s) => s.loaded);
@@ -52,12 +61,23 @@ export function SchemaEditor() {
   const refCount = useSchemaStore((s) => s.schema.refs.length);
   const name = useSchemaStore((s) => s.name);
   const setName = useSchemaStore((s) => s.setName);
+  const isOwner = useSchemaStore((s) => s.isOwner);
+  const canEdit = useSchemaStore((s) => s.canEdit);
+  const myRole = useSchemaStore((s) => s.myRole);
 
   const [missing, setMissing] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [currentRecord, setCurrentRecord] = useState<SchemaRecord | null>(null);
   const [editorOpen, setEditorOpen] = useState(() =>
     readBool(STORAGE_EDITOR_OPEN, true),
   );
   const [aiOpen, setAiOpen] = useState(() => readBool(STORAGE_AI_OPEN, false));
+
+  useAutoSnapshot();
+  const session = useSchemaCollab();
+  const { peers, setCursor } = usePresence(session);
+
   const { user, configured, isLoading: authLoading } = useAuth();
   const aiAvailable = configured && !authLoading && !!user;
   const aiTooltip = !configured
@@ -90,12 +110,13 @@ export function SchemaEditor() {
     async function run() {
       if (!id) return;
       try {
-        const rec = await storage.get(id);
+        const rec = await loadSchema(id);
         if (cancelled) return;
         if (!rec) {
           setMissing(true);
           return;
         }
+        setCurrentRecord(rec);
         loadRecord(rec);
       } catch (e) {
         if (cancelled) return;
@@ -108,7 +129,7 @@ export function SchemaEditor() {
       cancelled = true;
       reset();
     };
-  }, [id, loadRecord, reset, storage]);
+  }, [id, loadRecord, reset]);
 
   if (missing) {
     return (
@@ -134,7 +155,7 @@ export function SchemaEditor() {
       </div>
       <div className="min-h-0 flex-1">
         {loaded ? (
-          <DBMLEditor />
+          <DBMLEditor session={session} />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Loading…
@@ -160,7 +181,12 @@ export function SchemaEditor() {
         {editorPane}
       </SidePanel>
       <div className="h-full min-w-0 flex-1 bg-background">
-        {loaded && <DiagramCanvas />}
+        {loaded && (
+          <DiagramCanvas
+            peers={session ? peers : undefined}
+            onCursorMove={session ? setCursor : undefined}
+          />
+        )}
       </div>
       <SidePanel
         side="right"
@@ -184,7 +210,13 @@ export function SchemaEditor() {
               <ArrowLeft />
             </Link>
           </Button>
-          <NameEditor value={name} onSave={setName} />
+          {isOwner ? (
+            <NameEditor value={name} onSave={setName} />
+          ) : (
+            <span className="inline-flex max-w-xs items-center gap-1.5 truncate px-1.5 py-1 text-sm font-medium">
+              {name}
+            </span>
+          )}
           <span className="ml-2 inline-flex items-center gap-3 rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <TableIcon className="size-3" />
@@ -204,7 +236,35 @@ export function SchemaEditor() {
               </span>
             )}
           </span>
+          <RoleBadge canEdit={canEdit} myRole={myRole} />
+
           <div className="ml-auto flex items-center gap-1">
+            {session && <PresenceStack peers={peers} />}
+            {currentRecord && currentRecord.ownerId !== undefined && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => setHistoryOpen(true)}
+                    aria-label="Version history"
+                  >
+                    <Clock />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Version history</TooltipContent>
+              </Tooltip>
+            )}
+            {isOwner && currentRecord && (
+              <Button
+                size="sm"
+                variant="soft"
+                className="gap-1.5"
+                onClick={() => setShareOpen(true)}
+              >
+                <Share2 className="size-3.5" /> Share
+              </Button>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -232,7 +292,8 @@ export function SchemaEditor() {
                     aria-pressed={aiOpen}
                     aria-label={aiOpen ? "Hide AI panel" : "Show AI panel"}
                     className={cn(
-                      aiOpen && "shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-primary)_25%,transparent)]",
+                      aiOpen &&
+                        "shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-primary)_25%,transparent)]",
                     )}
                   >
                     {aiOpen ? <PanelRightClose /> : <PanelRight />}
@@ -244,9 +305,72 @@ export function SchemaEditor() {
           </div>
         </AppHeader>
 
+        {!canEdit && <ReadOnlyBanner myRole={myRole} />}
+
         <main className="min-h-0 flex-1">{main}</main>
+
+        {currentRecord && (
+          <ShareDialog
+            open={shareOpen}
+            onClose={() => setShareOpen(false)}
+            schema={currentRecord}
+            onSchemaUpdated={(next) => setCurrentRecord(next)}
+          />
+        )}
+        <HistoryDialog
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+        />
       </div>
     </TooltipProvider>
+  );
+}
+
+function RoleBadge({
+  canEdit,
+  myRole,
+}: {
+  canEdit: boolean;
+  myRole: ReturnType<typeof useSchemaStore.getState>["myRole"];
+}) {
+  if (!myRole || myRole === "owner") return null;
+  const isPublic = myRole === "public-viewer" || myRole === "public-editor";
+  const labels: Record<string, string> = {
+    editor: "Editor",
+    viewer: "Viewer",
+    "public-editor": "Public · editor",
+    "public-viewer": "Public · viewer",
+  };
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px]",
+        isPublic
+          ? "border-collab/30 bg-collab/10 text-collab"
+          : "border-border bg-surface-2 text-muted-foreground",
+      )}
+    >
+      {isPublic ? <Globe className="size-3" /> : <Eye className="size-3" />}
+      {labels[myRole] ?? "Viewer"}
+      {!canEdit && " · read-only"}
+    </span>
+  );
+}
+
+function ReadOnlyBanner({
+  myRole,
+}: {
+  myRole: ReturnType<typeof useSchemaStore.getState>["myRole"];
+}) {
+  const isPublic = myRole === "public-viewer";
+  return (
+    <div className="flex shrink-0 items-center justify-center gap-2 border-b border-border bg-surface-2/60 px-4 py-1.5 text-[12px] text-muted-foreground">
+      <Eye className="size-3.5" />
+      <span>
+        You&apos;re viewing in read-only mode.
+        {isPublic && " Sign in for full access if invited."}
+      </span>
+    </div>
   );
 }
 

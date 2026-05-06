@@ -2,6 +2,8 @@ import { supabase } from "@/lib/supabase/client";
 import {
   countTables,
   makeId,
+  type MyRole,
+  type PublicRole,
   type SchemaRecord,
   type SchemaSummary,
   type StorageBackend,
@@ -16,11 +18,12 @@ interface DbRow {
   name: string;
   dbml: string;
   positions: Positions;
+  public_role: PublicRole;
   created_at: string;
   updated_at: string;
 }
 
-function rowToRecord(row: DbRow): SchemaRecord {
+function rowToRecord(row: DbRow, myRole: MyRole = null): SchemaRecord {
   return {
     id: row.id,
     name: row.name,
@@ -28,7 +31,35 @@ function rowToRecord(row: DbRow): SchemaRecord {
     positions: row.positions ?? {},
     createdAt: new Date(row.created_at).getTime(),
     updatedAt: new Date(row.updated_at).getTime(),
+    ownerId: row.owner_id,
+    publicRole: row.public_role ?? "none",
+    myRole,
   };
+}
+
+async function deriveMyRole(
+  schemaId: string,
+  ownerId: string,
+  publicRole: PublicRole,
+): Promise<MyRole> {
+  if (!supabase) return null;
+  const { data } = await supabase.auth.getUser();
+  const userId = data.user?.id ?? null;
+  if (userId === ownerId) return "owner";
+  if (userId) {
+    const { data: collab } = await supabase
+      .from("schema_collaborators")
+      .select("role")
+      .eq("schema_id", schemaId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (collab?.role === "editor" || collab?.role === "viewer")
+      return collab.role;
+  }
+  // Public link fallback.
+  if (publicRole === "editor") return "public-editor";
+  if (publicRole === "viewer") return "public-viewer";
+  return null;
 }
 
 async function currentUserId(): Promise<string> {
@@ -64,27 +95,38 @@ export const cloudBackend: StorageBackend = {
       .maybeSingle();
     if (error) throw error;
     if (!data) return undefined;
-    return rowToRecord(data as DbRow);
+    const row = data as DbRow;
+    const myRole = await deriveMyRole(row.id, row.owner_id, row.public_role);
+    return rowToRecord(row, myRole);
   },
 
   async put(rec: SchemaRecord): Promise<void> {
     if (!supabase) throw new Error("Supabase is not configured.");
     const ownerId = await currentUserId();
-    // Upsert by primary key. We deliberately omit `created_at` so an upsert
-    // doesn't clobber the original creation time on existing rows; the column
-    // default (`now()`) sets it on first insert. The trigger maintains
-    // `updated_at` on every update.
-    const { error } = await supabase.from(TABLE).upsert(
-      {
-        id: rec.id,
-        owner_id: ownerId,
+    // We can't use `.upsert()` here: ON CONFLICT DO UPDATE makes Postgres
+    // pre-check the UPDATE policy (`can_edit_schema(id)`) which queries the
+    // schemas row. For a brand-new id that row doesn't exist yet, so the
+    // function returns false and the entire upsert is rejected with
+    // "new row violates row-level security policy", even on the no-conflict
+    // path. Splitting into INSERT + UPDATE sidesteps it.
+    const { error: insErr } = await supabase.from(TABLE).insert({
+      id: rec.id,
+      owner_id: ownerId,
+      name: rec.name,
+      dbml: rec.dbml,
+      positions: rec.positions,
+    });
+    if (!insErr) return;
+    if (insErr.code !== "23505") throw insErr; // not a duplicate-key, real error
+    const { error: updErr } = await supabase
+      .from(TABLE)
+      .update({
         name: rec.name,
         dbml: rec.dbml,
         positions: rec.positions,
-      },
-      { onConflict: "id" },
-    );
-    if (error) throw error;
+      })
+      .eq("id", rec.id);
+    if (updErr) throw updErr;
   },
 
   async delete(id: string): Promise<void> {

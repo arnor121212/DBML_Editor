@@ -10,6 +10,8 @@ import {
 } from "@/lib/dbml/toFlow";
 import { autoLayout } from "@/lib/dbml/layout";
 import { getActiveBackend, type SchemaRecord } from "@/lib/storage";
+import type { MyRole, PublicRole } from "@/lib/storage/types";
+import { permissionFor } from "@/lib/sharing/permissions";
 import {
   computeLineHunks,
   synthesizePreview,
@@ -31,6 +33,11 @@ interface SchemaState {
   schemaId: string | null;
   name: string;
   createdAt: number;
+  ownerId: string | null;
+  myRole: MyRole;
+  publicRole: PublicRole;
+  canEdit: boolean;
+  isOwner: boolean;
   // Source
   dbml: string;
   // Parsed
@@ -43,6 +50,8 @@ interface SchemaState {
   // UI
   hoveredColumnKey: string | null; // `${tableId}::${column}`
   loaded: boolean;
+  /** Updated on any content edit; used by the auto-snapshot timer. */
+  lastEditAt: number;
   // AI inline review
   review: ReviewState | null;
 
@@ -51,6 +60,11 @@ interface SchemaState {
   reset: () => void;
   setName: (name: string) => void;
   setDbml: (text: string) => void;
+  /** Apply DBML text from an external source (collab Y.Text observer). Skips
+   *  the lastEditAt bump so we don't immediately auto-snapshot a remote edit
+   *  on top of our own. */
+  applyExternalDbml: (text: string) => void;
+  applyExternalPositions: (positions: Positions) => void;
   setNodes: (updater: (prev: Node<TableNodeData>[]) => Node<TableNodeData>[]) => void;
   setEdges: (updater: (prev: Edge<RelationEdgeData>[]) => Edge<RelationEdgeData>[]) => void;
   updatePosition: (id: string, pos: { x: number; y: number }) => void;
@@ -125,6 +139,11 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   schemaId: null,
   name: "Untitled schema",
   createdAt: 0,
+  ownerId: null,
+  myRole: null,
+  publicRole: "none",
+  canEdit: true,
+  isOwner: true,
   dbml: "",
   schema: EMPTY_SCHEMA,
   errors: [],
@@ -133,6 +152,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   positions: {},
   hoveredColumnKey: null,
   loaded: false,
+  lastEditAt: 0,
   review: null,
 
   loadRecord(rec) {
@@ -141,7 +161,6 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const errors = result.ok ? [] : result.errors;
     const positions = { ...rec.positions };
     const { nodes, edges } = toFlow(schema, positions);
-    // First time loading a schema with no saved layout: lay everything out.
     let finalNodes = nodes;
     if (Object.keys(positions).length === 0 && nodes.length > 0) {
       finalNodes = autoLayout(nodes, edges);
@@ -149,10 +168,16 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     } else {
       finalNodes = placeNewTables(nodes, positions);
     }
+    const perm = permissionFor(rec);
     set({
       schemaId: rec.id,
       name: rec.name,
       createdAt: rec.createdAt,
+      ownerId: rec.ownerId ?? null,
+      myRole: rec.myRole ?? null,
+      publicRole: rec.publicRole ?? "none",
+      canEdit: perm.canEdit,
+      isOwner: perm.isOwner,
       dbml: rec.dbml,
       schema,
       errors,
@@ -161,6 +186,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       positions,
       loaded: true,
       hoveredColumnKey: null,
+      lastEditAt: 0,
       review: null,
     });
   },
@@ -170,6 +196,11 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       schemaId: null,
       name: "Untitled schema",
       createdAt: 0,
+      ownerId: null,
+      myRole: null,
+      publicRole: "none",
+      canEdit: true,
+      isOwner: true,
       dbml: "",
       schema: EMPTY_SCHEMA,
       errors: [],
@@ -178,12 +209,13 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       positions: {},
       hoveredColumnKey: null,
       loaded: false,
+      lastEditAt: 0,
       review: null,
     });
   },
 
   setName(name) {
-    set({ name });
+    set({ name, lastEditAt: Date.now() });
     void get().persist();
   },
 
@@ -194,7 +226,26 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     // (applyReview clears it before calling), so this only fires on manual edits.
     const reviewWasActive = prev.review !== null;
     const partial = buildParsedStatePartial(text, prev.positions);
-    set({ ...partial, ...(reviewWasActive ? { review: null } : null) });
+    set({
+      ...partial,
+      lastEditAt: Date.now(),
+      ...(reviewWasActive ? { review: null } : null),
+    });
+    void get().persist();
+  },
+
+  applyExternalDbml(text) {
+    const prev = get();
+    const partial = buildParsedStatePartial(text, prev.positions);
+    set(partial);
+    void get().persist();
+  },
+
+  applyExternalPositions(positions) {
+    const merged = { ...positions };
+    const { schema } = get();
+    const { nodes, edges } = toFlow(schema, merged);
+    set({ positions: merged, nodes, edges });
     void get().persist();
   },
 
@@ -210,7 +261,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
 
   updatePosition(id, pos) {
     const positions = { ...get().positions, [id]: pos };
-    set({ positions });
+    set({ positions, lastEditAt: Date.now() });
     void get().persist();
   },
 
@@ -219,7 +270,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const laid = autoLayout(nodes, edges, direction);
     const positions: Positions = {};
     for (const n of laid) positions[n.id] = n.position;
-    set({ nodes: laid, positions });
+    set({ nodes: laid, positions, lastEditAt: Date.now() });
     void get().persist();
   },
 
@@ -316,6 +367,9 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   async persist() {
     const s = get();
     if (!s.schemaId) return;
+    // Viewers (incl. anonymous public-link viewers, plus signed-in viewers
+    // receiving live edits from peers) should never write back. Skip silently.
+    if (!s.canEdit) return;
     try {
       await getActiveBackend().put({
         id: s.schemaId,

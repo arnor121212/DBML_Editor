@@ -1,5 +1,20 @@
 import type { Positions } from "@/lib/dbml/toFlow";
 
+export type PublicRole = "none" | "viewer" | "editor";
+export type CollaboratorRole = "viewer" | "editor" | "owner";
+/**
+ * The role the current viewer has on a record. `null` for purely-local
+ * records (no sharing concept). For cloud records, populated by the cloud
+ * backend.
+ */
+export type MyRole =
+  | "owner"
+  | "editor"
+  | "viewer"
+  | "public-editor"
+  | "public-viewer"
+  | null;
+
 export interface SchemaRecord {
   id: string;
   name: string;
@@ -7,6 +22,10 @@ export interface SchemaRecord {
   positions: Positions;
   createdAt: number;
   updatedAt: number;
+  // Cloud-only fields. Undefined for purely-local records.
+  ownerId?: string;
+  publicRole?: PublicRole;
+  myRole?: MyRole;
 }
 
 export interface SchemaSummary {

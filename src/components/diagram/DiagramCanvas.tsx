@@ -20,14 +20,21 @@ import { RelationEdge } from "./RelationEdge";
 import { DiagramToolbar } from "./DiagramToolbar";
 import { EmptyDiagram } from "./EmptyDiagram";
 import { EdgeMarkers } from "./EdgeMarkers";
+import { RemoteCursors } from "@/components/collab/RemoteCursors";
 import { useSchemaStore } from "@/store/schemaStore";
 import { pickHeaderColor } from "@/lib/dbml/palette";
 import type { TableNodeData } from "@/lib/dbml/toFlow";
+import type { PresencePeer } from "@/lib/collab/usePresence";
 
 const nodeTypes: NodeTypes = { table: TableNode };
 const edgeTypes: EdgeTypes = { relation: RelationEdge };
 
-function CanvasInner() {
+interface CanvasProps {
+  peers?: PresencePeer[];
+  onCursorMove?: (pos: { x: number; y: number } | null) => void;
+}
+
+function CanvasInner({ peers, onCursorMove }: CanvasProps) {
   const flowRef = useRef<HTMLDivElement>(null);
   const nodes = useSchemaStore((s) => s.nodes);
   const edges = useSchemaStore((s) => s.edges);
@@ -35,8 +42,27 @@ function CanvasInner() {
   const updatePosition = useSchemaStore((s) => s.updatePosition);
   const setHovered = useSchemaStore((s) => s.setHoveredColumn);
   const schemaId = useSchemaStore((s) => s.schemaId);
-  const { fitView } = useReactFlow();
+  const canEdit = useSchemaStore((s) => s.canEdit);
+  const { fitView, screenToFlowPosition } = useReactFlow();
   const isEmpty = nodes.length === 0;
+
+  // Track local mouse over the canvas in flow coords. Attached to flowRef
+  // (a sibling of React Flow's pane), not as an overlay, so React Flow's
+  // own event handling — drag, hover, scroll — keeps working.
+  useEffect(() => {
+    if (!onCursorMove || !flowRef.current) return;
+    const el = flowRef.current;
+    const onMove = (e: MouseEvent) => {
+      onCursorMove(screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+    };
+    const onLeave = () => onCursorMove(null);
+    el.addEventListener("mousemove", onMove);
+    el.addEventListener("mouseleave", onLeave);
+    return () => {
+      el.removeEventListener("mousemove", onMove);
+      el.removeEventListener("mouseleave", onLeave);
+    };
+  }, [onCursorMove, screenToFlowPosition]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<TableNodeData>>[]) => {
@@ -88,7 +114,7 @@ function CanvasInner() {
         proOptions={proOptions}
         minZoom={0.2}
         maxZoom={2}
-        nodesDraggable
+        nodesDraggable={canEdit}
         nodesConnectable={false}
         elementsSelectable
         selectNodesOnDrag={false}
@@ -122,15 +148,16 @@ function CanvasInner() {
           <DiagramToolbar flowRef={flowRef} />
         </Panel>
       </ReactFlow>
+      {peers && <RemoteCursors peers={peers} />}
       {isEmpty && <EmptyDiagram />}
     </div>
   );
 }
 
-export function DiagramCanvas() {
+export function DiagramCanvas(props: CanvasProps) {
   return (
     <ReactFlowProvider>
-      <CanvasInner />
+      <CanvasInner {...props} />
     </ReactFlowProvider>
   );
 }
