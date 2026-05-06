@@ -3,6 +3,12 @@ dist
 dist-ssr
 *.local
 
+# Environment variables — never commit real keys.
+# .env.example is the tracked template.
+.env
+.env.*
+!.env.example
+
 # TypeScript incremental build cache
 *.tsbuildinfo
 
