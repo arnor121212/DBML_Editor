@@ -21,12 +21,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus } from "lucide-react";
-import {
-  makeId,
-  putSchema,
-  type SchemaRecord,
-} from "@/lib/storage/schemas";
+import { makeId, useStorage, type SchemaRecord } from "@/lib/storage";
 import { BLANK_DBML, ECOMMERCE_DBML } from "@/lib/dbml/examples";
+import { formatError } from "@/lib/utils";
 
 type Template = "blank" | "ecommerce";
 
@@ -40,7 +37,9 @@ export function NewSchemaDialog({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("Untitled schema");
   const [template, setTemplate] = useState<Template>("ecommerce");
+  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+  const storage = useStorage();
 
   async function create() {
     const now = Date.now();
@@ -52,11 +51,18 @@ export function NewSchemaDialog({
       createdAt: now,
       updatedAt: now,
     };
-    await putSchema(rec);
-    toast.success("Schema created");
-    setOpen(false);
-    onCreated?.(rec);
-    navigate(`/s/${rec.id}`);
+    setBusy(true);
+    try {
+      await storage.put(rec);
+      toast.success("Schema created");
+      setOpen(false);
+      onCreated?.(rec);
+      navigate(`/s/${rec.id}`);
+    } catch (e) {
+      toast.error("Couldn't create schema", { description: formatError(e) });
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -100,10 +106,12 @@ export function NewSchemaDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setOpen(false)}>
+          <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={create}>Create schema</Button>
+          <Button onClick={create} disabled={busy}>
+            {busy ? "Creating…" : "Create schema"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

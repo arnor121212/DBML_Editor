@@ -28,6 +28,7 @@ import {
   downloadDataUrl,
 } from "@/lib/exports/image";
 import { exportSql, downloadFile, type SqlDialect } from "@/lib/exports/sql";
+import { formatError } from "@/lib/utils";
 
 interface Props {
   flowRef: React.RefObject<HTMLDivElement | null>;
@@ -63,7 +64,7 @@ export function DiagramToolbar({ flowRef }: Props) {
       downloadDataUrl(`${slug}.png`, dataUrl);
       toast.success("Exported PNG");
     } catch (e) {
-      toast.error("Could not export PNG", { description: String(e) });
+      toast.error("Could not export PNG", { description: formatError(e) });
     }
   };
 
@@ -78,7 +79,7 @@ export function DiagramToolbar({ flowRef }: Props) {
       downloadDataUrl(`${slug}.svg`, data);
       toast.success("Exported SVG");
     } catch (e) {
-      toast.error("Could not export SVG", { description: String(e) });
+      toast.error("Could not export SVG", { description: formatError(e) });
     }
   };
 
@@ -88,7 +89,7 @@ export function DiagramToolbar({ flowRef }: Props) {
       downloadFile(`${slug}.${dialect}.sql`, sql, "text/plain;charset=utf-8");
       toast.success(`Exported ${labelFor(dialect)} SQL`);
     } catch (e) {
-      toast.error("SQL export failed", { description: String(e) });
+      toast.error("SQL export failed", { description: formatError(e) });
     }
   };
 

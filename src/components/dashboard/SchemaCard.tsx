@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Card } from "@/components/ui/card";
 import { formatRelativeTime } from "@/lib/utils";
-import type { SchemaSummary } from "@/lib/storage/schemas";
+import type { SchemaSummary } from "@/lib/storage";
 
 interface Props {
   schema: SchemaSummary;

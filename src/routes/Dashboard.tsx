@@ -7,49 +7,65 @@ import { SchemaCard } from "@/components/dashboard/SchemaCard";
 import { NewSchemaDialog } from "@/components/dashboard/NewSchemaDialog";
 import { RenameDialog } from "@/components/dashboard/RenameDialog";
 import { DeleteConfirmDialog } from "@/components/dashboard/DeleteConfirmDialog";
-import {
-  deleteSchema,
-  duplicateSchema,
-  getSchema,
-  listSchemas,
-  putSchema,
-  type SchemaSummary,
-} from "@/lib/storage/schemas";
+import { MigrationPrompt } from "@/components/auth/MigrationPrompt";
+import { useStorage, type SchemaSummary } from "@/lib/storage";
+import { useAuth } from "@/lib/auth/AuthProvider";
+import { formatError } from "@/lib/utils";
 
 export function Dashboard() {
+  const storage = useStorage();
+  const { user } = useAuth();
   const [schemas, setSchemas] = useState<SchemaSummary[] | null>(null);
   const [renaming, setRenaming] = useState<SchemaSummary | null>(null);
   const [deleting, setDeleting] = useState<SchemaSummary | null>(null);
 
   const refresh = useCallback(async () => {
-    const list = await listSchemas();
-    setSchemas(list);
-  }, []);
+    try {
+      const list = await storage.list();
+      setSchemas(list);
+    } catch (e) {
+      toast.error("Couldn't load schemas", { description: formatError(e) });
+      setSchemas([]);
+    }
+  }, [storage]);
 
   useEffect(() => {
+    setSchemas(null);
     void refresh();
   }, [refresh]);
 
   async function handleRename(name: string) {
     if (!renaming) return;
-    const rec = await getSchema(renaming.id);
-    if (!rec) return;
-    await putSchema({ ...rec, name, updatedAt: Date.now() });
-    toast.success("Renamed");
-    await refresh();
+    try {
+      const rec = await storage.get(renaming.id);
+      if (!rec) return;
+      await storage.put({ ...rec, name, updatedAt: Date.now() });
+      toast.success("Renamed");
+      await refresh();
+    } catch (e) {
+      toast.error("Couldn't rename schema", { description: formatError(e) });
+    }
   }
 
   async function handleDuplicate(s: SchemaSummary) {
-    const dup = await duplicateSchema(s.id);
-    if (dup) toast.success("Duplicated");
-    await refresh();
+    try {
+      const dup = await storage.duplicate(s.id);
+      if (dup) toast.success("Duplicated");
+      await refresh();
+    } catch (e) {
+      toast.error("Couldn't duplicate schema", { description: formatError(e) });
+    }
   }
 
   async function handleDelete() {
     if (!deleting) return;
-    await deleteSchema(deleting.id);
-    toast.success("Deleted");
-    await refresh();
+    try {
+      await storage.delete(deleting.id);
+      toast.success("Deleted");
+      await refresh();
+    } catch (e) {
+      toast.error("Couldn't delete schema", { description: formatError(e) });
+    }
   }
 
   const isEmpty = schemas !== null && schemas.length === 0;
@@ -70,7 +86,10 @@ export function Dashboard() {
                 Your schemas
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                DBML in, beautiful diagrams out. Edits are saved to this device.
+                DBML in, beautiful diagrams out.{" "}
+                {user
+                  ? "Synced to your account."
+                  : "Edits are saved to this device."}
               </p>
             </div>
             <NewSchemaDialog
@@ -106,7 +125,7 @@ export function Dashboard() {
             </div>
           )}
 
-          <FooterNote />
+          <FooterNote signedIn={!!user} />
         </div>
       </main>
 
@@ -122,6 +141,7 @@ export function Dashboard() {
         onClose={() => setDeleting(null)}
         onConfirm={handleDelete}
       />
+      {user && <MigrationPrompt onMigrated={refresh} />}
     </div>
   );
 }
@@ -169,12 +189,13 @@ function EmptyState({ onCreated }: { onCreated: () => void }) {
   );
 }
 
-function FooterNote() {
+function FooterNote({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="mt-12 flex items-center justify-between border-t border-border pt-6 text-xs text-muted-foreground">
       <span>
-        Schemas are stored locally in IndexedDB on this device. Clearing site
-        data will remove them.
+        {signedIn
+          ? "Schemas are synced to your Supabase account and accessible from any device."
+          : "Schemas are stored locally on this device. Sign in to sync them across devices."}
       </span>
       <a
         href="https://dbml.dbdiagram.io/docs/"
