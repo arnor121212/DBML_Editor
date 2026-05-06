@@ -7,6 +7,7 @@ import {
   defineDbmlThemes,
   registerDbmlLanguage,
 } from "./dbmlLanguage";
+import { InlineDiffController } from "./inlineDiffController";
 import { useTheme } from "@/lib/theme";
 import { useSchemaStore } from "@/store/schemaStore";
 import { debounce } from "@/lib/utils";
@@ -34,6 +35,15 @@ export function DBMLEditor({ session }: Props) {
   const errors = useSchemaStore((s) => s.errors);
   const canEdit = useSchemaStore((s) => s.canEdit);
   const setDbml = useSchemaStore((s) => s.setDbml);
+  const review = useSchemaStore((s) => s.review);
+  const diffControllerRef = useRef<InlineDiffController | null>(null);
+  /**
+   * Set to true synchronously *before* a programmatic edit (controller swap,
+   * dbml-watch setValue). Monaco fires onChange synchronously inside setValue;
+   * handleChange consumes the flag and skips the debounced setDbml call so
+   * we don't accidentally cancel the active review.
+   */
+  const programmaticEditRef = useRef(false);
   const themeName = resolved === "dark" ? "schemasync-dark" : "schemasync-light";
 
   // Debounced update — keeps the parser off the typing path.
@@ -73,10 +83,12 @@ export function DBMLEditor({ session }: Props) {
   }, [monaco, errors]);
 
   // Sync external dbml changes (e.g. Load example) into the model without
-  // resetting the cursor on user-driven edits. Skipped when a collab session
-  // owns the model — y-monaco mediates external updates through Y.Text.
+  // resetting the cursor on user-driven edits. Skipped when:
+  //   - a collab session is active — y-monaco mediates external updates via Y.Text
+  //   - a review is active — the InlineDiffController owns the model content
   useEffect(() => {
     if (session) return;
+    if (review) return;
     if (!editorRef.current) return;
     if (dbml === lastSyncedRef.current) return;
     const model = editorRef.current.getModel();
@@ -85,9 +97,10 @@ export function DBMLEditor({ session }: Props) {
       lastSyncedRef.current = dbml;
       return;
     }
+    programmaticEditRef.current = true;
     editorRef.current.setValue(dbml);
     lastSyncedRef.current = dbml;
-  }, [dbml, session]);
+  }, [dbml, session, review]);
 
   // y-monaco binding lifecycle. Bind once we have both an editor instance
   // and a collab session; tear down on either change or unmount.
@@ -116,6 +129,36 @@ export function DBMLEditor({ session }: Props) {
     };
   }, [session]);
 
+  // Mount/update/dispose the inline diff overlay based on review state.
+  useEffect(() => {
+    if (!monaco || !editorRef.current) return;
+    if (review) {
+      if (!diffControllerRef.current) {
+        diffControllerRef.current = new InlineDiffController(
+          editorRef.current,
+          monaco,
+          {
+            beforeProgrammaticEdit: () => {
+              programmaticEditRef.current = true;
+            },
+          },
+        );
+      }
+      diffControllerRef.current.update(review);
+    } else if (diffControllerRef.current) {
+      diffControllerRef.current.dispose();
+      diffControllerRef.current = null;
+    }
+  }, [monaco, review]);
+
+  useEffect(
+    () => () => {
+      diffControllerRef.current?.dispose();
+      diffControllerRef.current = null;
+    },
+    [],
+  );
+
   const handleMount = useCallback<OnMount>(
     (ed, m) => {
       editorRef.current = ed;
@@ -133,6 +176,14 @@ export function DBMLEditor({ session }: Props) {
       // When y-monaco is in charge, the Y.Text observer in useSchemaCollab
       // is already debouncing the change into the store — don't double-emit.
       if (session) return;
+      // Programmatic edits (controller-driven, or our own setValue calls in
+      // the dbml-watch effect) shouldn't propagate back through setDbml —
+      // doing so would cancel an active review or echo external syncs.
+      if (programmaticEditRef.current) {
+        programmaticEditRef.current = false;
+        lastSyncedRef.current = value;
+        return;
+      }
       lastSyncedRef.current = value;
       debouncedSet(value);
     },

@@ -9,6 +9,10 @@ dist-ssr
 .env.*
 !.env.example
 
+# Supabase CLI machine-local caches
+supabase/.temp
+supabase/.branches
+
 # TypeScript incremental build cache
 *.tsbuildinfo
 

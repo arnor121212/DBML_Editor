@@ -7,17 +7,23 @@ import {
   Code2,
   Eye,
   Globe,
+  PanelLeft,
+  PanelLeftClose,
+  PanelRight,
+  PanelRightClose,
   Pencil,
   Share2,
   Table as TableIcon,
 } from "lucide-react";
 import { AppHeader } from "@/components/layout/AppHeader";
-import { SplitPane } from "@/components/layout/SplitPane";
+import { SidePanel } from "@/components/layout/SidePanel";
 import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
+import { AiPanel } from "@/components/editor/AiPanel";
 import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
 import { ShareDialog } from "@/components/sharing/ShareDialog";
 import { HistoryDialog } from "@/components/history/HistoryDialog";
+import { PresenceStack } from "@/components/collab/PresenceStack";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,15 +31,25 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSchemaStore } from "@/store/schemaStore";
 import { loadSchema, type SchemaRecord } from "@/lib/storage";
+import { useAuth } from "@/lib/auth/AuthProvider";
 import { useAutoSnapshot } from "@/lib/snapshots/useAutoSnapshot";
 import { useSchemaCollab } from "@/lib/collab/useSchemaCollab";
 import { usePresence } from "@/lib/collab/usePresence";
-import { PresenceStack } from "@/components/collab/PresenceStack";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { cn, formatError } from "@/lib/utils";
+
+const STORAGE_EDITOR_OPEN = "schemasync.panel.editor";
+const STORAGE_AI_OPEN = "schemasync.panel.ai";
+
+function readBool(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+  const v = window.localStorage.getItem(key);
+  if (v === null) return fallback;
+  return v === "1";
+}
 
 export function SchemaEditor() {
   const { id } = useParams<{ id: string }>();
@@ -53,10 +69,40 @@ export function SchemaEditor() {
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [currentRecord, setCurrentRecord] = useState<SchemaRecord | null>(null);
+  const [editorOpen, setEditorOpen] = useState(() =>
+    readBool(STORAGE_EDITOR_OPEN, true),
+  );
+  const [aiOpen, setAiOpen] = useState(() => readBool(STORAGE_AI_OPEN, false));
 
   useAutoSnapshot();
   const session = useSchemaCollab();
   const { peers, setCursor } = usePresence(session);
+
+  const { user, configured, isLoading: authLoading } = useAuth();
+  const aiAvailable = configured && !authLoading && !!user;
+  const aiTooltip = !configured
+    ? "AI generation requires Supabase configuration."
+    : !user
+      ? "Sign in to use AI generation."
+      : aiOpen
+        ? "Hide AI panel"
+        : "Show AI panel";
+
+  function toggleEditor() {
+    setEditorOpen((v) => {
+      const next = !v;
+      window.localStorage.setItem(STORAGE_EDITOR_OPEN, next ? "1" : "0");
+      return next;
+    });
+  }
+  function toggleAi() {
+    if (!aiAvailable) return;
+    setAiOpen((v) => {
+      const next = !v;
+      window.localStorage.setItem(STORAGE_AI_OPEN, next ? "1" : "0");
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +147,60 @@ export function SchemaEditor() {
     );
   }
 
+  const editorPane = (
+    <div className="flex h-full min-h-0 flex-col border-r border-border bg-surface">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[12px] text-muted-foreground">
+        <Code2 className="size-3.5" />
+        <span>schema.dbml</span>
+      </div>
+      <div className="min-h-0 flex-1">
+        {loaded ? (
+          <DBMLEditor session={session} />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Loading…
+          </div>
+        )}
+      </div>
+      <ErrorBar />
+    </div>
+  );
+
+  const aiPane = <AiPanel onClose={toggleAi} />;
+
+  const main = (
+    <div className="flex h-full w-full overflow-hidden">
+      <SidePanel
+        side="left"
+        open={editorOpen}
+        storageKey="schemasync.panel.editor.width"
+        defaultWidth={420}
+        minWidth={300}
+        maxWidth={720}
+      >
+        {editorPane}
+      </SidePanel>
+      <div className="h-full min-w-0 flex-1 bg-background">
+        {loaded && (
+          <DiagramCanvas
+            peers={session ? peers : undefined}
+            onCursorMove={session ? setCursor : undefined}
+          />
+        )}
+      </div>
+      <SidePanel
+        side="right"
+        open={aiOpen}
+        storageKey="schemasync.panel.ai.width"
+        defaultWidth={400}
+        minWidth={320}
+        maxWidth={640}
+      >
+        {aiPane}
+      </SidePanel>
+    </div>
+  );
+
   return (
     <TooltipProvider delayDuration={120}>
       <div className="flex h-full min-h-0 flex-col">
@@ -137,76 +237,77 @@ export function SchemaEditor() {
             )}
           </span>
           <RoleBadge canEdit={canEdit} myRole={myRole} />
-          {session && (
-            <div className="ml-auto">
-              <PresenceStack peers={peers} />
-            </div>
-          )}
-          {currentRecord && currentRecord.ownerId !== undefined && (
+
+          <div className="ml-auto flex items-center gap-1">
+            {session && <PresenceStack peers={peers} />}
+            {currentRecord && currentRecord.ownerId !== undefined && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    onClick={() => setHistoryOpen(true)}
+                    aria-label="Version history"
+                  >
+                    <Clock />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Version history</TooltipContent>
+              </Tooltip>
+            )}
+            {isOwner && currentRecord && (
+              <Button
+                size="sm"
+                variant="soft"
+                className="gap-1.5"
+                onClick={() => setShareOpen(true)}
+              >
+                <Share2 className="size-3.5" /> Share
+              </Button>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  onClick={() => setHistoryOpen(true)}
-                  aria-label="Version history"
+                  onClick={toggleEditor}
+                  aria-pressed={editorOpen}
+                  aria-label={editorOpen ? "Hide editor" : "Show editor"}
                 >
-                  <Clock />
+                  {editorOpen ? <PanelLeftClose /> : <PanelLeft />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Version history</TooltipContent>
+              <TooltipContent>
+                {editorOpen ? "Hide editor" : "Show editor"}
+              </TooltipContent>
             </Tooltip>
-          )}
-          {isOwner && currentRecord && (
-            <Button
-              size="sm"
-              variant="soft"
-              className="gap-1.5"
-              onClick={() => setShareOpen(true)}
-            >
-              <Share2 className="size-3.5" /> Share
-            </Button>
-          )}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={aiAvailable ? -1 : 0}>
+                  <Button
+                    size="icon-sm"
+                    variant={aiOpen ? "soft" : "ghost"}
+                    onClick={toggleAi}
+                    disabled={!aiAvailable}
+                    aria-pressed={aiOpen}
+                    aria-label={aiOpen ? "Hide AI panel" : "Show AI panel"}
+                    className={cn(
+                      aiOpen &&
+                        "shadow-[0_0_0_1px_color-mix(in_oklab,var(--color-primary)_25%,transparent)]",
+                    )}
+                  >
+                    {aiOpen ? <PanelRightClose /> : <PanelRight />}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{aiTooltip}</TooltipContent>
+            </Tooltip>
+          </div>
         </AppHeader>
 
         {!canEdit && <ReadOnlyBanner myRole={myRole} />}
 
-        <main className="min-h-0 flex-1">
-          <SplitPane
-            storageKey="schemasync.split"
-            initial={35}
-            min={22}
-            max={65}
-            left={
-              <div className="flex h-full min-h-0 flex-col border-r border-border bg-surface">
-                <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-[12px] text-muted-foreground">
-                  <Code2 className="size-3.5" />
-                  <span>schema.dbml</span>
-                </div>
-                <div className="min-h-0 flex-1">
-                  {loaded ? (
-                    <DBMLEditor session={session} />
-                  ) : (
-                    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                      Loading…
-                    </div>
-                  )}
-                </div>
-                <ErrorBar />
-              </div>
-            }
-            right={
-              <div className="h-full bg-background">
-                {loaded && (
-                  <DiagramCanvas
-                    peers={session ? peers : undefined}
-                    onCursorMove={session ? setCursor : undefined}
-                  />
-                )}
-              </div>
-            }
-          />
-        </main>
+        <main className="min-h-0 flex-1">{main}</main>
 
         {currentRecord && (
           <ShareDialog
