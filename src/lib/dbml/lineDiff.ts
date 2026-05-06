@@ -66,7 +66,25 @@ export function computeLineHunks(base: string, proposed: string): DiffHunk[] {
     });
   }
 
-  return hunks;
+  // Drop hunks that only differ in whitespace/blank lines — the model often
+  // re-emits an existing table block with tiny formatting tweaks, which the
+  // line differ flags as a remove+add even though the schema is unchanged.
+  // Filtering here keeps the inline review focused on real edits.
+  return hunks.filter((h) => !isCosmeticHunk(h));
+}
+
+function normalizeForCompare(lines: string[]): string[] {
+  return lines
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l.length > 0);
+}
+
+function isCosmeticHunk(h: DiffHunk): boolean {
+  const a = normalizeForCompare(h.removedLines);
+  const b = normalizeForCompare(h.addedLines);
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 export type HunkStatus = "pending" | "accepted" | "rejected";

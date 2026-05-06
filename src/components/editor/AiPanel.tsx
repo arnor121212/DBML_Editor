@@ -53,6 +53,13 @@ type Turn =
   | {
       id: string;
       prompt: string;
+      status: "chat";
+      message: string;
+      truncated?: boolean;
+    }
+  | {
+      id: string;
+      prompt: string;
       status: "error";
       errorMsg: string;
       truncated?: boolean;
@@ -74,6 +81,118 @@ function makeId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+const DBML_TOP_LEVEL = /^(table|ref|enum|project|tablegroup|note)\b/i;
+
+// True when `text` starts with something the DBML parser would accept as a
+// top-level construct (after skipping leading whitespace and comments). Used
+// to catch the case where the model ignores the system prompt and replies
+// conversationally — the parser's "Expected Table…" error would otherwise be
+// the only signal the user sees.
+// The model regularly drops content from the existing schema when iterating —
+// sometimes the leading comments + Project block, sometimes entire tables. The
+// helpers below extract top-level constructs from a DBML document by name and
+// let us restore anything the model omitted, so the AI flow becomes strictly
+// additive from the user's POV.
+
+interface Block {
+  kind: "table" | "ref" | "enum";
+  name: string;
+  source: string;
+}
+
+// Match a top-level construct header (Table foo {, Ref bar {, Enum baz {).
+const BLOCK_HEADER =
+  /^[ \t]*(Table|Ref|Enum)\s+(?:"([^"]+)"|([A-Za-z_][\w.]*))[^{]*\{/gim;
+
+function extractBlocks(text: string): Block[] {
+  const blocks: Block[] = [];
+  BLOCK_HEADER.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = BLOCK_HEADER.exec(text)) !== null) {
+    const start = m.index;
+    const openBrace = m.index + m[0].length - 1;
+    let depth = 1;
+    let i = openBrace + 1;
+    while (i < text.length && depth > 0) {
+      const c = text[i];
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      i++;
+    }
+    blocks.push({
+      kind: m[1].toLowerCase() as Block["kind"],
+      name: m[2] ?? m[3],
+      source: text.slice(start, i),
+    });
+    BLOCK_HEADER.lastIndex = i;
+  }
+  return blocks;
+}
+
+// Lifts the leading "header" of a DBML doc — comments, blank lines, and any
+// Project block that sit BEFORE the first Table/Ref/Enum.
+function extractLeadingHeader(text: string): string {
+  const m = text.match(/^([\s\S]*?)(?=^[ \t]*(?:Table|Ref|Enum|TableGroup)\b)/im);
+  return m ? m[1] : "";
+}
+
+function preserveLeadingHeader(current: string, proposed: string): string {
+  const header = extractLeadingHeader(current);
+  if (!header.trim()) return proposed;
+
+  const proposedHeader = extractLeadingHeader(proposed);
+  if (proposedHeader.trim() === header.trim()) return proposed;
+  // If proposed already includes the Project block somewhere, just prepend the
+  // pre-Project comments (so we don't end up with two Project declarations).
+  if (
+    /Project\s+\w+/i.test(header) &&
+    /Project\s+\w+/i.test(proposedHeader)
+  ) {
+    const preProject = header.replace(/Project\s+\w+[\s\S]*$/i, "");
+    return preProject.trimEnd() + "\n\n" + proposed.trimStart();
+  }
+  return header + proposed.trimStart();
+}
+
+// Re-append any Table/Ref/Enum block from `current` whose name is not present
+// in `proposed`. This catches the "model dropped half my schema" failure mode.
+function restoreDroppedBlocks(current: string, proposed: string): string {
+  const proposedBlocks = extractBlocks(proposed);
+  const proposedKeys = new Set(
+    proposedBlocks.map((b) => `${b.kind}:${b.name}`),
+  );
+  const missing = extractBlocks(current).filter(
+    (b) => !proposedKeys.has(`${b.kind}:${b.name}`),
+  );
+  if (missing.length === 0) return proposed;
+  return proposed.trimEnd() + "\n\n" + missing.map((b) => b.source).join("\n\n");
+}
+
+function looksLikeDbml(text: string): boolean {
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === " " || c === "\t" || c === "\n" || c === "\r") {
+      i++;
+      continue;
+    }
+    if (text.startsWith("//", i)) {
+      const nl = text.indexOf("\n", i);
+      if (nl === -1) return false;
+      i = nl + 1;
+      continue;
+    }
+    if (text.startsWith("/*", i)) {
+      const end = text.indexOf("*/", i + 2);
+      if (end === -1) return false;
+      i = end + 2;
+      continue;
+    }
+    break;
+  }
+  return DBML_TOP_LEVEL.test(text.slice(i));
 }
 
 export function AiPanel({ onClose }: { onClose: () => void }) {
@@ -229,7 +348,51 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    const parsed = parseDbml(proposedDbml);
+    if (!looksLikeDbml(proposedDbml)) {
+      // Model ignored the "DBML only" system rule and replied conversationally.
+      // Show its reply as a chat message instead of feeding prose to the parser.
+      updateTurn(id, () => ({
+        id,
+        prompt: trimmed,
+        status: "chat",
+        message: proposedDbml.trim(),
+        truncated,
+      }));
+      return;
+    }
+
+    // Restore anything the model silently dropped: leading comments + Project
+    // block first, then any Table/Ref/Enum that vanished from the response.
+    // This makes the AI flow strictly additive — the model can propose new
+    // content but can't make existing constructs disappear without an explicit
+    // user request to delete them.
+    let restored = proposedDbml;
+    if (currentDbml) {
+      restored = preserveLeadingHeader(currentDbml, restored);
+      restored = restoreDroppedBlocks(currentDbml, restored);
+    }
+
+    // Echo detection: if the model returned the existing DBML essentially
+    // unchanged (common when the prompt isn't actually a schema change), show
+    // a chat reply explaining the panel's purpose instead of the misleading
+    // "schema already matches" message.
+    if (
+      currentDbml &&
+      restored.trim().replace(/\s+/g, " ") ===
+        currentDbml.trim().replace(/\s+/g, " ")
+    ) {
+      updateTurn(id, () => ({
+        id,
+        prompt: trimmed,
+        status: "chat",
+        message:
+          "I can only help with database schema changes — try asking me to add or modify tables, columns, or relationships.",
+        truncated,
+      }));
+      return;
+    }
+
+    const parsed = parseDbml(restored);
     if (!parsed.ok) {
       // A truncated response is the most common reason the parser chokes —
       // call that out so the user knows raising the limit (or splitting the
@@ -260,7 +423,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       return;
     }
 
-    const ok = startReview(proposedDbml);
+    const ok = startReview(restored);
     if (!ok) {
       updateTurn(id, () => ({
         id,
@@ -515,6 +678,7 @@ function TurnCard({
               "bg-gradient-to-b from-success via-success to-success/40",
             turn.status === "rejected" && "bg-muted-foreground/30",
             turn.status === "no-op" && "bg-muted-foreground/30",
+            turn.status === "chat" && "bg-muted-foreground/40",
             turn.status === "error" && "bg-destructive",
           )}
         />
@@ -559,10 +723,18 @@ function TurnCard({
               </p>
             </div>
           )}
+          {turn.status === "chat" && (
+            <div>
+              <StatusLabel tone="muted" label="reply" />
+              <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-snug text-foreground/90">
+                {turn.message}
+              </p>
+            </div>
+          )}
           {turn.status === "error" && (
             <div>
               <StatusLabel tone="error" />
-              <p className="mt-1 text-[12px] text-muted-foreground">
+              <p className="mt-1 whitespace-pre-line text-[12px] text-muted-foreground">
                 {turn.errorMsg}
               </p>
             </div>
