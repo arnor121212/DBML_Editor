@@ -18,10 +18,16 @@ type Turn =
       id: string;
       prompt: string;
       status: "review";
-      proposedDbml: string;
       diff: SchemaDiff;
     }
-  | { id: string; prompt: string; status: "applied"; diff: SchemaDiff }
+  | {
+      id: string;
+      prompt: string;
+      status: "applied";
+      diff: SchemaDiff;
+      accepted: number;
+      rejected: number;
+    }
   | { id: string; prompt: string; status: "rejected"; diff: SchemaDiff }
   | {
       id: string;
@@ -50,13 +56,21 @@ function makeId(): string {
 }
 
 export function AiPanel({ onClose }: { onClose: () => void }) {
-  const setDbml = useSchemaStore((s) => s.setDbml);
   const tableCount = useSchemaStore((s) => s.schema.tables.length);
+  const startReview = useSchemaStore((s) => s.startReview);
+  const applyReview = useSchemaStore((s) => s.applyReview);
+  const discardReview = useSchemaStore((s) => s.discardReview);
+  const reviewActive = useSchemaStore((s) => s.review !== null);
+  const allHunksDecided = useSchemaStore(
+    (s) =>
+      s.review !== null && s.review.hunks.every((h) => h.status !== "pending"),
+  );
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const wasReviewActiveRef = useRef(reviewActive);
 
   const suggestions = useMemo(
     () => (tableCount > 0 ? ITERATE_SUGGESTIONS : FRESH_SUGGESTIONS),
@@ -69,11 +83,59 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     }
   }, [turns, loading]);
 
+  // External review-end (e.g., user typed in the editor while a review was
+  // active). Mark the active review turn as rejected so the history reads
+  // honestly. Our explicit Apply/Discard and the auto-finalize effect both
+  // transition the turn before clearing the store so this branch is a no-op
+  // for them.
+  useEffect(() => {
+    if (wasReviewActiveRef.current && !reviewActive) {
+      setTurns((all) =>
+        all.map((t) =>
+          t.status === "review"
+            ? { id: t.id, prompt: t.prompt, status: "rejected", diff: t.diff }
+            : t,
+        ),
+      );
+    }
+    wasReviewActiveRef.current = reviewActive;
+  }, [reviewActive]);
+
+  // Auto-finalize when every hunk has been individually decided. The
+  // running dbml is already in sync (setHunkStatus updates it on each
+  // decision), so applyReview here just clears the review state — the
+  // editor controller disposes its decorations and inline buttons.
+  useEffect(() => {
+    if (!allHunksDecided) return;
+    const review = useSchemaStore.getState().review;
+    if (!review) return;
+    const accepted = review.hunks.filter((h) => h.status === "accepted").length;
+    const rejected = review.hunks.filter((h) => h.status === "rejected").length;
+
+    setTurns((all) =>
+      all.map((t) =>
+        t.status === "review"
+          ? {
+              id: t.id,
+              prompt: t.prompt,
+              status: "applied",
+              diff: t.diff,
+              accepted,
+              rejected,
+            }
+          : t,
+      ),
+    );
+    applyReview();
+    if (accepted > 0) toast.success("Applied");
+  }, [allHunksDecided, applyReview]);
+
   function updateTurn(id: string, replace: () => Turn) {
     setTurns((all) => all.map((t) => (t.id === id ? replace() : t)));
   }
 
-  function autoRejectPending() {
+  /** A new prompt while a review is pending discards the previous one. */
+  function discardPendingReview() {
     setTurns((all) =>
       all.map((t) =>
         t.status === "review"
@@ -81,13 +143,14 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
           : t,
       ),
     );
+    if (useSchemaStore.getState().review) discardReview();
   }
 
   async function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
 
-    autoRejectPending();
+    discardPendingReview();
 
     const id = makeId();
     setTurns((t) => [
@@ -149,47 +212,69 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       return;
     }
 
+    const ok = startReview(proposedDbml);
+    if (!ok) {
+      updateTurn(id, () => ({
+        id,
+        prompt: trimmed,
+        status: "no-op",
+        message: "No line-level changes detected.",
+      }));
+      return;
+    }
+
     updateTurn(id, () => ({
       id,
       prompt: trimmed,
       status: "review",
-      proposedDbml,
       diff,
     }));
   }
 
   function accept(turnId: string) {
+    // Read from the store before the setTurns updater runs — React 18 defers
+    // updater execution, so we can't rely on a closure-captured boolean.
+    const review = useSchemaStore.getState().review;
+    if (!review) return;
+    // Pending hunks default to "accepted" on Apply (matches applyReview).
+    const accepted = review.hunks.filter(
+      (h) => h.status === "accepted" || h.status === "pending",
+    ).length;
+    const rejected = review.hunks.filter((h) => h.status === "rejected").length;
+
     setTurns((all) =>
-      all.map((t) => {
-        if (t.id !== turnId || t.status !== "review") return t;
-        setDbml(t.proposedDbml);
-        toast.success(
-          t.diff.totalChanges === 1
-            ? "Applied 1 change"
-            : `Applied ${t.diff.totalChanges} changes`,
-        );
-        return {
-          id: t.id,
-          prompt: t.prompt,
-          status: "applied",
-          diff: t.diff,
-        };
-      }),
+      all.map((t) =>
+        t.id === turnId && t.status === "review"
+          ? {
+              id: t.id,
+              prompt: t.prompt,
+              status: "applied",
+              diff: t.diff,
+              accepted,
+              rejected,
+            }
+          : t,
+      ),
     );
+    applyReview();
+    toast.success("Applied");
   }
 
   function reject(turnId: string) {
+    const hadReview = useSchemaStore.getState().review !== null;
     setTurns((all) =>
-      all.map((t) => {
-        if (t.id !== turnId || t.status !== "review") return t;
-        return {
-          id: t.id,
-          prompt: t.prompt,
-          status: "rejected",
-          diff: t.diff,
-        };
-      }),
+      all.map((t) =>
+        t.id === turnId && t.status === "review"
+          ? {
+              id: t.id,
+              prompt: t.prompt,
+              status: "rejected",
+              diff: t.diff,
+            }
+          : t,
+      ),
     );
+    if (hadReview) discardReview();
   }
 
   return (
@@ -396,6 +481,11 @@ function TurnCard({
           {turn.status === "applied" && (
             <div>
               <StatusLabel tone="applied" />
+              <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                <span className="text-success">{turn.accepted}</span> accepted
+                {", "}
+                <span className="text-destructive">{turn.rejected}</span> rejected
+              </p>
               <div className="mt-1.5">
                 <DiffSummary diff={turn.diff} />
               </div>
@@ -494,6 +584,17 @@ function ReviewBody({
   onAccept: () => void;
   onReject: () => void;
 }) {
+  const review = useSchemaStore((s) => s.review);
+
+  // Hunk progress — drives the "1 accepted · 0 rejected · 2 pending" line.
+  const counts = useMemo(() => {
+    const c = { pending: 0, accepted: 0, rejected: 0 };
+    if (review) {
+      for (const h of review.hunks) c[h.status]++;
+    }
+    return c;
+  }, [review]);
+
   return (
     <div>
       <div className="flex items-center justify-between">
@@ -503,23 +604,54 @@ function ReviewBody({
           {diff.totalChanges === 1 ? "change" : "changes"}
         </span>
       </div>
+      {review && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[10.5px] text-muted-foreground">
+          <span>
+            {review.hunks.length}{" "}
+            {review.hunks.length === 1 ? "hunk" : "hunks"}
+          </span>
+          <span className="opacity-50">·</span>
+          {counts.accepted > 0 && (
+            <span className="text-success">
+              {counts.accepted} accepted
+            </span>
+          )}
+          {counts.rejected > 0 && (
+            <span className="text-destructive">
+              {counts.rejected} rejected
+            </span>
+          )}
+          {counts.pending > 0 && (
+            <span className="text-primary">{counts.pending} pending</span>
+          )}
+        </div>
+      )}
       <div className="mt-2">
         <DiffSummary diff={diff} />
       </div>
-      <div className="mt-3 flex items-center gap-1.5">
+      <p className="mt-2 text-[10.5px] leading-relaxed text-muted-foreground">
+        Use the inline{" "}
+        <span className="font-mono text-foreground/85">Accept</span>/
+        <span className="font-mono text-foreground/85">Reject</span> buttons in
+        the editor to decide each hunk, or use{" "}
+        <span className="text-foreground/85">Apply</span> /{" "}
+        <span className="text-foreground/85">Discard</span> below to commit
+        everything in one go.
+      </p>
+      <div className="mt-2 flex items-center gap-1.5">
         <button
           type="button"
           onClick={onAccept}
           className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2.5 text-[12px] font-medium text-primary-foreground shadow-[0_1px_0_0_color-mix(in_oklab,white_20%,transparent)_inset] transition-opacity hover:opacity-90 active:translate-y-px"
         >
-          <Check className="size-3.5" /> Accept
+          <Check className="size-3.5" /> Apply
         </button>
         <button
           type="button"
           onClick={onReject}
           className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-surface px-2.5 text-[12px] font-medium text-foreground/85 transition-colors hover:bg-surface-2 hover:text-foreground"
         >
-          <X className="size-3.5" /> Reject
+          <X className="size-3.5" /> Discard
         </button>
       </div>
     </div>
