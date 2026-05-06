@@ -41,6 +41,21 @@ export function stringToHue(s: string): number {
   return h % 360;
 }
 
+/**
+ * Best-effort message extraction. Supabase `PostgrestError` is a plain object
+ * with a `message` field, so `String(e)` gives "[object Object]" — this
+ * helper produces something a human can read.
+ */
+export function formatError(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object" && e !== null && "message" in e) {
+    const m = (e as { message: unknown }).message;
+    if (typeof m === "string" && m.length > 0) return m;
+  }
+  return "Unknown error";
+}
+
 export function debounce<F extends (...args: never[]) => void>(
   fn: F,
   ms: number,

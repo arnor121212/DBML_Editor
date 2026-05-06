@@ -15,11 +15,14 @@ import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSchemaStore } from "@/store/schemaStore";
-import { getSchema } from "@/lib/storage/schemas";
+import { useStorage } from "@/lib/storage";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
+import { formatError } from "@/lib/utils";
 
 export function SchemaEditor() {
   const { id } = useParams<{ id: string }>();
+  const storage = useStorage();
   const loadRecord = useSchemaStore((s) => s.loadRecord);
   const reset = useSchemaStore((s) => s.reset);
   const loaded = useSchemaStore((s) => s.loaded);
@@ -33,22 +36,29 @@ export function SchemaEditor() {
 
   useEffect(() => {
     let cancelled = false;
+    setMissing(false);
     async function run() {
       if (!id) return;
-      const rec = await getSchema(id);
-      if (cancelled) return;
-      if (!rec) {
+      try {
+        const rec = await storage.get(id);
+        if (cancelled) return;
+        if (!rec) {
+          setMissing(true);
+          return;
+        }
+        loadRecord(rec);
+      } catch (e) {
+        if (cancelled) return;
+        toast.error("Couldn't load schema", { description: formatError(e) });
         setMissing(true);
-        return;
       }
-      loadRecord(rec);
     }
     void run();
     return () => {
       cancelled = true;
       reset();
     };
-  }, [id, loadRecord, reset]);
+  }, [id, loadRecord, reset, storage]);
 
   if (missing) {
     return (

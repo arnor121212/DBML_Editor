@@ -9,7 +9,7 @@ import {
   type TableNodeData,
 } from "@/lib/dbml/toFlow";
 import { autoLayout } from "@/lib/dbml/layout";
-import { putSchema, type SchemaRecord } from "@/lib/storage/schemas";
+import { getActiveBackend, type SchemaRecord } from "@/lib/storage";
 
 interface SchemaState {
   // Identity
@@ -194,7 +194,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const s = get();
     if (!s.schemaId) return;
     try {
-      await putSchema({
+      await getActiveBackend().put({
         id: s.schemaId,
         name: s.name,
         dbml: s.dbml,
@@ -202,8 +202,12 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
         createdAt: s.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
-    } catch {
-      /* swallow — IndexedDB unavailable in some private modes */
+    } catch (e) {
+      // Swallow per call — toast on every keystroke would be noisy. Log to
+      // console so cloud failures aren't completely silent. (IndexedDB also
+      // throws here in private-browsing mode; that's expected.)
+      // eslint-disable-next-line no-console
+      console.warn("[SchemaSync] persist failed:", e);
     }
   },
 }));
