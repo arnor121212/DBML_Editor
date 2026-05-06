@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, CornerDownLeft, Loader2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUp,
+  Check,
+  CornerDownLeft,
+  Loader2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { streamDbmlFromPrompt } from "@/lib/ai/textToDbml";
 import { useSchemaStore } from "@/store/schemaStore";
@@ -19,6 +26,7 @@ type Turn =
       prompt: string;
       status: "review";
       diff: SchemaDiff;
+      truncated?: boolean;
     }
   | {
       id: string;
@@ -27,15 +35,28 @@ type Turn =
       diff: SchemaDiff;
       accepted: number;
       rejected: number;
+      truncated?: boolean;
     }
-  | { id: string; prompt: string; status: "rejected"; diff: SchemaDiff }
+  | {
+      id: string;
+      prompt: string;
+      status: "rejected";
+      diff: SchemaDiff;
+      truncated?: boolean;
+    }
   | {
       id: string;
       prompt: string;
       status: "no-op";
       message: string;
     }
-  | { id: string; prompt: string; status: "error"; errorMsg: string };
+  | {
+      id: string;
+      prompt: string;
+      status: "error";
+      errorMsg: string;
+      truncated?: boolean;
+    };
 
 const FRESH_SUGGESTIONS = [
   "A blogging platform with users, posts, comments, and tags",
@@ -93,7 +114,13 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       setTurns((all) =>
         all.map((t) =>
           t.status === "review"
-            ? { id: t.id, prompt: t.prompt, status: "rejected", diff: t.diff }
+            ? {
+                id: t.id,
+                prompt: t.prompt,
+                status: "rejected",
+                diff: t.diff,
+                truncated: t.truncated,
+              }
             : t,
         ),
       );
@@ -122,6 +149,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
               diff: t.diff,
               accepted,
               rejected,
+              truncated: t.truncated,
             }
           : t,
       ),
@@ -139,7 +167,13 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     setTurns((all) =>
       all.map((t) =>
         t.status === "review"
-          ? { id: t.id, prompt: t.prompt, status: "rejected", diff: t.diff }
+          ? {
+              id: t.id,
+              prompt: t.prompt,
+              status: "rejected",
+              diff: t.diff,
+              truncated: t.truncated,
+            }
           : t,
       ),
     );
@@ -163,7 +197,11 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     const beforeSchema = useSchemaStore.getState().schema;
     const currentDbml = useSchemaStore.getState().dbml;
 
-    const { dbml: proposedDbml, error } = await streamDbmlFromPrompt({
+    const {
+      dbml: proposedDbml,
+      error,
+      meta,
+    } = await streamDbmlFromPrompt({
       prompt: trimmed,
       currentDbml: currentDbml || undefined,
       onChunk: (_chunk, accumulated) => {
@@ -178,25 +216,35 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     });
     setLoading(false);
 
+    const truncated = meta?.truncated === true;
+
     if (error || !proposedDbml) {
       updateTurn(id, () => ({
         id,
         prompt: trimmed,
         status: "error",
         errorMsg: error ?? "Unknown error.",
+        truncated,
       }));
       return;
     }
 
     const parsed = parseDbml(proposedDbml);
     if (!parsed.ok) {
+      // A truncated response is the most common reason the parser chokes —
+      // call that out so the user knows raising the limit (or splitting the
+      // prompt) is the path forward.
+      const baseMsg =
+        "The model returned DBML that didn't parse: " +
+        (parsed.errors[0]?.message ?? "unknown syntax error");
       updateTurn(id, () => ({
         id,
         prompt: trimmed,
         status: "error",
-        errorMsg:
-          "The model returned DBML that didn't parse: " +
-          (parsed.errors[0]?.message ?? "unknown syntax error"),
+        errorMsg: truncated
+          ? baseMsg + " (Response was cut off by the length limit.)"
+          : baseMsg,
+        truncated,
       }));
       return;
     }
@@ -228,6 +276,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
       prompt: trimmed,
       status: "review",
       diff,
+      truncated,
     }));
   }
 
@@ -252,6 +301,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
               diff: t.diff,
               accepted,
               rejected,
+              truncated: t.truncated,
             }
           : t,
       ),
@@ -270,6 +320,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
               prompt: t.prompt,
               status: "rejected",
               diff: t.diff,
+              truncated: t.truncated,
             }
           : t,
       ),
@@ -516,6 +567,9 @@ function TurnCard({
               </p>
             </div>
           )}
+          {turn.status !== "applying" &&
+            turn.status !== "no-op" &&
+            turn.truncated && <TruncatedBanner />}
         </div>
       </div>
     </div>
@@ -808,6 +862,24 @@ function StatusLabel({
       {tone === "applied" && <Check className="size-3" />}
       {m.text}
     </span>
+  );
+}
+
+function TruncatedBanner() {
+  return (
+    <div
+      role="status"
+      className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11.5px] leading-snug text-amber-200"
+    >
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+      <div>
+        <span className="font-medium">Response was truncated.</span>{" "}
+        <span className="text-amber-200/80">
+          The model hit the length limit (12 000 tokens). Output may be
+          incomplete — try a smaller prompt or split the work into iterations.
+        </span>
+      </div>
+    </div>
   );
 }
 
