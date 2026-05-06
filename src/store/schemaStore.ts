@@ -10,6 +10,21 @@ import {
 } from "@/lib/dbml/toFlow";
 import { autoLayout } from "@/lib/dbml/layout";
 import { getActiveBackend, type SchemaRecord } from "@/lib/storage";
+import {
+  computeLineHunks,
+  synthesizePreview,
+  type HunkStatus,
+  type ReviewHunk,
+} from "@/lib/dbml/lineDiff";
+
+export interface ReviewState {
+  /** The DBML at the moment review started — what we revert to on Discard. */
+  baseDbml: string;
+  /** Full proposed DBML returned by the model. */
+  proposedDbml: string;
+  /** Per-hunk decisions (pending/accepted/rejected). */
+  hunks: ReviewHunk[];
+}
 
 interface SchemaState {
   // Identity
@@ -28,6 +43,8 @@ interface SchemaState {
   // UI
   hoveredColumnKey: string | null; // `${tableId}::${column}`
   loaded: boolean;
+  // AI inline review
+  review: ReviewState | null;
 
   // Actions
   loadRecord: (rec: SchemaRecord) => void;
@@ -40,9 +57,43 @@ interface SchemaState {
   applyAutoLayout: (direction?: "LR" | "TB") => void;
   setHoveredColumn: (key: string | null) => void;
   persist: () => Promise<void>;
+  // Review actions
+  startReview: (proposedDbml: string) => boolean;
+  setHunkStatus: (id: string, status: HunkStatus) => void;
+  setAllHunkStatus: (status: HunkStatus) => void;
+  applyReview: () => void;
+  discardReview: () => void;
 }
 
 const EMPTY_SCHEMA: SchemaModel = { tables: [], refs: [], enums: [] };
+
+/**
+ * Parse DBML, build flow nodes/edges, and return a partial state suitable
+ * for `set()`. Used by setDbml, setHunkStatus, applyReview, discardReview —
+ * anywhere we want to atomically swap the current text and its derived
+ * schema/diagram state. On parse error returns just `{ dbml, errors }` so
+ * the diagram keeps showing the last good schema.
+ */
+function buildParsedStatePartial(
+  text: string,
+  prevPositions: Positions,
+): Partial<SchemaState> {
+  const result = parseDbml(text);
+  if (!result.ok) {
+    return { dbml: text, errors: result.errors };
+  }
+  const positions = { ...prevPositions };
+  const { nodes, edges } = toFlow(result.schema, positions);
+  const finalNodes = placeNewTables(nodes, positions);
+  return {
+    dbml: text,
+    errors: [],
+    schema: result.schema,
+    nodes: finalNodes,
+    edges,
+    positions,
+  };
+}
 
 /**
  * Place tables that have no saved position to the right of the existing
@@ -82,6 +133,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   positions: {},
   hoveredColumnKey: null,
   loaded: false,
+  review: null,
 
   loadRecord(rec) {
     const result = parseDbml(rec.dbml);
@@ -109,6 +161,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       positions,
       loaded: true,
       hoveredColumnKey: null,
+      review: null,
     });
   },
 
@@ -125,6 +178,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       positions: {},
       hoveredColumnKey: null,
       loaded: false,
+      review: null,
     });
   },
 
@@ -135,29 +189,12 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
 
   setDbml(text) {
     const prev = get();
-    const result = parseDbml(text);
-    if (!result.ok) {
-      // Keep previous schema for visual continuity; show errors in editor.
-      set({ dbml: text, errors: result.errors });
-      void get().persist();
-      return;
-    }
-    const schema = result.schema;
-
-    // Preserve every saved position. New tables get parked to the right of
-    // the existing cluster — never re-lays out tables the user has placed.
-    const positions = { ...prev.positions };
-    const { nodes, edges } = toFlow(schema, positions);
-    const finalNodes = placeNewTables(nodes, positions);
-
-    set({
-      dbml: text,
-      errors: [],
-      schema,
-      nodes: finalNodes,
-      edges,
-      positions,
-    });
+    // Any direct write to dbml ends an active review. The synthesized preview
+    // text passed back through here from applyReview already has review === null
+    // (applyReview clears it before calling), so this only fires on manual edits.
+    const reviewWasActive = prev.review !== null;
+    const partial = buildParsedStatePartial(text, prev.positions);
+    set({ ...partial, ...(reviewWasActive ? { review: null } : null) });
     void get().persist();
   },
 
@@ -188,6 +225,92 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
 
   setHoveredColumn(key) {
     set({ hoveredColumnKey: key });
+  },
+
+  startReview(proposedDbml) {
+    const baseDbml = get().dbml;
+    const rawHunks = computeLineHunks(baseDbml, proposedDbml);
+    if (rawHunks.length === 0) return false;
+    const hunks: ReviewHunk[] = rawHunks.map((h) => ({
+      ...h,
+      status: "pending",
+    }));
+    set({ review: { baseDbml, proposedDbml, hunks } });
+    return true;
+  },
+
+  setHunkStatus(id, status) {
+    const prev = get();
+    const review = prev.review;
+    if (!review) return;
+    const hunks = review.hunks.map((h) =>
+      h.id === id ? { ...h, status } : h,
+    );
+    const newReview = { ...review, hunks };
+    // "applied" mode → pending hunks contribute *original* lines; only
+    // accepted ones land in the diagram. Pending changes only become visible
+    // in dbml/diagram when the user actually accepts them.
+    const { text } = synthesizePreview(review.baseDbml, hunks, "applied");
+
+    if (text === prev.dbml) {
+      set({ review: newReview });
+      return;
+    }
+
+    const partial = buildParsedStatePartial(text, prev.positions);
+    set({ review: newReview, ...partial });
+    void get().persist();
+  },
+
+  setAllHunkStatus(status) {
+    const prev = get();
+    const review = prev.review;
+    if (!review) return;
+    const hunks = review.hunks.map((h) => ({ ...h, status }));
+    const newReview = { ...review, hunks };
+    const { text } = synthesizePreview(review.baseDbml, hunks, "applied");
+
+    if (text === prev.dbml) {
+      set({ review: newReview });
+      return;
+    }
+    const partial = buildParsedStatePartial(text, prev.positions);
+    set({ review: newReview, ...partial });
+    void get().persist();
+  },
+
+  applyReview() {
+    const prev = get();
+    const review = prev.review;
+    if (!review) return;
+    // Pending hunks default to "accepted" — clicking Apply with anything still
+    // pending means the user chose to keep the proposal as-is for those bits.
+    const decided: ReviewHunk[] = review.hunks.map((h) =>
+      h.status === "pending" ? { ...h, status: "accepted" } : h,
+    );
+    const { text } = synthesizePreview(review.baseDbml, decided, "applied");
+
+    // dbml may already be in sync (incremental hunk decisions kept it current).
+    if (text === prev.dbml) {
+      set({ review: null });
+      return;
+    }
+    const partial = buildParsedStatePartial(text, prev.positions);
+    set({ review: null, ...partial });
+    void get().persist();
+  },
+
+  discardReview() {
+    const prev = get();
+    const review = prev.review;
+    if (!review) return;
+    if (review.baseDbml === prev.dbml) {
+      set({ review: null });
+      return;
+    }
+    const partial = buildParsedStatePartial(review.baseDbml, prev.positions);
+    set({ review: null, ...partial });
+    void get().persist();
   },
 
   async persist() {

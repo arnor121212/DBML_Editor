@@ -6,6 +6,7 @@ import {
   defineDbmlThemes,
   registerDbmlLanguage,
 } from "./dbmlLanguage";
+import { InlineDiffController } from "./inlineDiffController";
 import { useTheme } from "@/lib/theme";
 import { useSchemaStore } from "@/store/schemaStore";
 import { debounce } from "@/lib/utils";
@@ -24,6 +25,15 @@ export function DBMLEditor() {
   const dbml = useSchemaStore((s) => s.dbml);
   const errors = useSchemaStore((s) => s.errors);
   const setDbml = useSchemaStore((s) => s.setDbml);
+  const review = useSchemaStore((s) => s.review);
+  const diffControllerRef = useRef<InlineDiffController | null>(null);
+  /**
+   * Set to true synchronously *before* a programmatic edit (controller swap,
+   * dbml-watch setValue). Monaco fires onChange synchronously inside setValue;
+   * handleChange consumes the flag and skips the debounced setDbml call so
+   * we don't accidentally cancel the active review.
+   */
+  const programmaticEditRef = useRef(false);
   const themeName = resolved === "dark" ? "schemasync-dark" : "schemasync-light";
 
   // Debounced update — keeps the parser off the typing path.
@@ -63,9 +73,11 @@ export function DBMLEditor() {
   }, [monaco, errors]);
 
   // Sync external dbml changes (e.g. Load example) into the model without
-  // resetting the cursor on user-driven edits.
+  // resetting the cursor on user-driven edits. Skipped while review is active —
+  // the InlineDiffController owns the model's content during that time.
   useEffect(() => {
     if (!editorRef.current) return;
+    if (review) return;
     if (dbml === lastSyncedRef.current) return;
     const model = editorRef.current.getModel();
     if (!model) return;
@@ -73,9 +85,40 @@ export function DBMLEditor() {
       lastSyncedRef.current = dbml;
       return;
     }
+    programmaticEditRef.current = true;
     editorRef.current.setValue(dbml);
     lastSyncedRef.current = dbml;
-  }, [dbml]);
+  }, [dbml, review]);
+
+  // Mount/update/dispose the inline diff overlay based on review state.
+  useEffect(() => {
+    if (!monaco || !editorRef.current) return;
+    if (review) {
+      if (!diffControllerRef.current) {
+        diffControllerRef.current = new InlineDiffController(
+          editorRef.current,
+          monaco,
+          {
+            beforeProgrammaticEdit: () => {
+              programmaticEditRef.current = true;
+            },
+          },
+        );
+      }
+      diffControllerRef.current.update(review);
+    } else if (diffControllerRef.current) {
+      diffControllerRef.current.dispose();
+      diffControllerRef.current = null;
+    }
+  }, [monaco, review]);
+
+  useEffect(
+    () => () => {
+      diffControllerRef.current?.dispose();
+      diffControllerRef.current = null;
+    },
+    [],
+  );
 
   const handleMount = useCallback<OnMount>(
     (ed, m) => {
@@ -91,6 +134,14 @@ export function DBMLEditor() {
   const handleChange = useCallback(
     (value: string | undefined) => {
       if (typeof value !== "string") return;
+      // Programmatic edits (controller-driven, or our own setValue calls in
+      // the dbml-watch effect) shouldn't propagate back through setDbml —
+      // doing so would cancel an active review or echo external syncs.
+      if (programmaticEditRef.current) {
+        programmaticEditRef.current = false;
+        lastSyncedRef.current = value;
+        return;
+      }
       lastSyncedRef.current = value;
       debouncedSet(value);
     },
