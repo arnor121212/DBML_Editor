@@ -12,7 +12,7 @@ import {
   Table as TableIcon,
 } from "lucide-react";
 import { AppHeader } from "@/components/layout/AppHeader";
-import { SplitPane } from "@/components/layout/SplitPane";
+import { SidePanel } from "@/components/layout/SidePanel";
 import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
 import { AiPanel } from "@/components/editor/AiPanel";
@@ -145,60 +145,35 @@ export function SchemaEditor() {
     </div>
   );
 
-  const diagramPane = (
-    <div className="h-full bg-background">
-      {loaded && <DiagramCanvas />}
-    </div>
-  );
-
   const aiPane = <AiPanel onClose={toggleAi} />;
 
-  let main: React.ReactNode;
-  if (editorOpen && aiOpen) {
-    main = (
-      <SplitPane
-        storageKey="schemasync.split.editor"
-        initial={32}
-        min={20}
-        max={55}
-        left={editorPane}
-        right={
-          <SplitPane
-            storageKey="schemasync.split.ai"
-            initial={62}
-            min={42}
-            max={82}
-            left={diagramPane}
-            right={aiPane}
-          />
-        }
-      />
-    );
-  } else if (editorOpen) {
-    main = (
-      <SplitPane
-        storageKey="schemasync.split.editor"
-        initial={35}
-        min={22}
-        max={65}
-        left={editorPane}
-        right={diagramPane}
-      />
-    );
-  } else if (aiOpen) {
-    main = (
-      <SplitPane
-        storageKey="schemasync.split.ai"
-        initial={68}
-        min={45}
-        max={82}
-        left={diagramPane}
-        right={aiPane}
-      />
-    );
-  } else {
-    main = diagramPane;
-  }
+  const main = (
+    <div className="flex h-full w-full overflow-hidden">
+      <SidePanel
+        side="left"
+        open={editorOpen}
+        storageKey="schemasync.panel.editor.width"
+        defaultWidth={420}
+        minWidth={300}
+        maxWidth={720}
+      >
+        {editorPane}
+      </SidePanel>
+      <div className="h-full min-w-0 flex-1 bg-background">
+        {loaded && <DiagramCanvas />}
+      </div>
+      <SidePanel
+        side="right"
+        open={aiOpen}
+        storageKey="schemasync.panel.ai.width"
+        defaultWidth={400}
+        minWidth={320}
+        maxWidth={640}
+      >
+        {aiPane}
+      </SidePanel>
+    </div>
+  );
 
   return (
     <TooltipProvider delayDuration={120}>
