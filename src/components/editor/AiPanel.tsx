@@ -131,29 +131,28 @@ function extractBlocks(text: string): Block[] {
   return blocks;
 }
 
-// Lifts the leading "header" of a DBML doc — comments, blank lines, and any
-// Project block that sit BEFORE the first Table/Ref/Enum.
-function extractLeadingHeader(text: string): string {
-  const m = text.match(/^([\s\S]*?)(?=^[ \t]*(?:Table|Ref|Enum|TableGroup)\b)/im);
+// Lifts only the leading comments + blank lines — i.e., the bit BEFORE the
+// first construct (Project / Table / Ref / Enum / TableGroup) that the model
+// reliably drops by accident. We deliberately stop at Project too: when the
+// user asks the AI to remove or modify the Project block, the model returns
+// DBML without it, and we mustn't force it back in. Project is a real
+// schema construct — if the model drops it accidentally, the user can ask
+// for it back, same as they would for a missing Table.
+function extractLeadingComments(text: string): string {
+  const m = text.match(
+    /^([\s\S]*?)(?=^[ \t]*(?:Project|Table|Ref|Enum|TableGroup)\b)/im,
+  );
   return m ? m[1] : "";
 }
 
-function preserveLeadingHeader(current: string, proposed: string): string {
-  const header = extractLeadingHeader(current);
-  if (!header.trim()) return proposed;
+function preserveLeadingComments(current: string, proposed: string): string {
+  const comments = extractLeadingComments(current);
+  if (!comments.trim()) return proposed;
 
-  const proposedHeader = extractLeadingHeader(proposed);
-  if (proposedHeader.trim() === header.trim()) return proposed;
-  // If proposed already includes the Project block somewhere, just prepend the
-  // pre-Project comments (so we don't end up with two Project declarations).
-  if (
-    /Project\s+\w+/i.test(header) &&
-    /Project\s+\w+/i.test(proposedHeader)
-  ) {
-    const preProject = header.replace(/Project\s+\w+[\s\S]*$/i, "");
-    return preProject.trimEnd() + "\n\n" + proposed.trimStart();
-  }
-  return header + proposed.trimStart();
+  const proposedComments = extractLeadingComments(proposed);
+  if (proposedComments.trim() === comments.trim()) return proposed;
+  // Splice the original comments back in front of whatever the model returned.
+  return comments + proposed.trimStart();
 }
 
 // Re-append any Table/Ref/Enum block from `current` whose name is not present
@@ -368,7 +367,7 @@ export function AiPanel({ onClose }: { onClose: () => void }) {
     // user request to delete them.
     let restored = proposedDbml;
     if (currentDbml) {
-      restored = preserveLeadingHeader(currentDbml, restored);
+      restored = preserveLeadingComments(currentDbml, restored);
       restored = restoreDroppedBlocks(currentDbml, restored);
     }
 
