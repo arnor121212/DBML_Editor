@@ -46,7 +46,7 @@ interface RequestBody {
 /** Cap on the model's output. Generous for any reasonable DBML schema while
  *  bounding worst-case cost — gpt-5.4-mini is cheap, but uncapped output
  *  + prompt-injection style abuse could still rack up a bill. */
-const MAX_OUTPUT_TOKENS = 12_000;
+const MAX_OUTPUT_TOKENS = 36_000;
 
 /** Sentinel emitted at the very end of the response stream when OpenAI's
  *  finish_reason is "length" (i.e. we hit MAX_OUTPUT_TOKENS). The frontend
@@ -80,13 +80,13 @@ Deno.serve(async (req) => {
 
   const prompt = body.prompt?.trim();
   if (!prompt) return jsonError("Missing `prompt`.", 400);
-  if (prompt.length > 8000) {
-    return jsonError("Prompt too long (max 8000 characters).", 400);
+  if (prompt.length > 24000) {
+    return jsonError("Prompt too long (max 24000 characters).", 400);
   }
 
   const currentDbml = body.currentDbml?.trim();
-  if (currentDbml && currentDbml.length > 16000) {
-    return jsonError("Current schema too large (max 16k characters).", 400);
+  if (currentDbml && currentDbml.length > 48000) {
+    return jsonError("Current schema too large (max 48k characters).", 400);
   }
 
   const userMessage = currentDbml
