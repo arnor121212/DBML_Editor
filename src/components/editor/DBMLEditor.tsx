@@ -105,14 +105,17 @@ export function DBMLEditor({ session }: Props) {
   // y-monaco binding lifecycle. Bind once we have both an editor instance
   // and a collab session; tear down on either change or unmount.
   //
-  // Construct the binding BEFORE writing anything to Y.Text or the model.
-  // MonacoBinding reconciles the two on first attach (Y.Text wins). Then,
-  // if Y.Text is still empty (we're the very first peer ever), seed it
-  // from the model's current value so the doc isn't blank for everyone.
+  // MonacoBinding's constructor reconciles the two on first attach (Y.Text
+  // wins): it calls `monacoModel.setValue(ytext.toString())`, which wipes the
+  // model when Y.Text is empty. Snapshot the model's value BEFORE that so we
+  // can push it into Y.Text when we're the very first peer — otherwise a
+  // freshly-created schema would sit empty until the seed effect (gated on
+  // provider sync, ~1.2s later) finally runs.
   useEffect(() => {
     if (!session || !editorRef.current) return;
     const model = editorRef.current.getModel();
     if (!model) return;
+    const initialModelValue = model.getValue();
     const binding = new MonacoBinding(
       session.text,
       model,
@@ -120,8 +123,8 @@ export function DBMLEditor({ session }: Props) {
       session.provider.awareness,
     );
     bindingRef.current = binding;
-    if (session.text.length === 0 && model.getValue().length > 0) {
-      session.setText(model.getValue());
+    if (session.text.length === 0 && initialModelValue.length > 0) {
+      session.setText(initialModelValue);
     }
     return () => {
       binding.destroy();
