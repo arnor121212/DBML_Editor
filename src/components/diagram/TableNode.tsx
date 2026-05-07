@@ -92,6 +92,9 @@ function TableNodeInner({ data, selected }: TableNodeProps) {
           style={{ background: headerColor }}
         />
         <span className="ml-1 truncate font-mono text-[13px] font-semibold tracking-tight text-foreground">
+          {data.schema && data.schema !== "public" && (
+            <span className="font-normal text-muted-foreground">{data.schema}.</span>
+          )}
           {data.name}
         </span>
         {data.note && (

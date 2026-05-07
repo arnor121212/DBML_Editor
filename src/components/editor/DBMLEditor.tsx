@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor, { useMonaco, type OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { MonacoBinding } from "y-monaco";
@@ -23,6 +23,11 @@ export function DBMLEditor({ session }: Props) {
   const monaco = useMonaco();
   const { resolved } = useTheme();
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  /** Bumped when the editor mounts so the y-monaco binding effect re-runs.
+   *  The session often arrives before Monaco finishes loading from the CDN;
+   *  without this the binding effect would bail on the null ref and never
+   *  re-fire because `session` hasn't changed. */
+  const [editorMountId, setEditorMountId] = useState(0);
   const bindingRef = useRef<MonacoBinding | null>(null);
   /**
    * Tracks the last value the user typed (or that we synced to the model).
@@ -44,6 +49,9 @@ export function DBMLEditor({ session }: Props) {
    * we don't accidentally cancel the active review.
    */
   const programmaticEditRef = useRef(false);
+  /** Tracks whether a review was active on the previous render so the sync
+   *  effect can detect the review→null transition and force reconciliation. */
+  const prevReviewRef = useRef<boolean>(false);
   const themeName = resolved === "dark" ? "schemasync-dark" : "schemasync-light";
 
   // Debounced update — keeps the parser off the typing path.
@@ -87,10 +95,19 @@ export function DBMLEditor({ session }: Props) {
   //   - a collab session is active — y-monaco mediates external updates via Y.Text
   //   - a review is active — the InlineDiffController owns the model content
   useEffect(() => {
+    // Detect review→null transition. During review the InlineDiffController
+    // puts *preview* text in the editor while the store's dbml holds the
+    // *applied* text — lastSyncedRef tracks the preview, so it can diverge
+    // from dbml. When the review ends we must always reconcile, even if
+    // dbml happens to equal lastSyncedRef (the texts converge for the
+    // all-accepted case but the editor may still hold stale content).
+    const wasReview = prevReviewRef.current;
+    prevReviewRef.current = review !== null;
+
     if (session) return;
     if (review) return;
     if (!editorRef.current) return;
-    if (dbml === lastSyncedRef.current) return;
+    if (!wasReview && dbml === lastSyncedRef.current) return;
     const model = editorRef.current.getModel();
     if (!model) return;
     if (model.getValue() === dbml) {
@@ -104,6 +121,11 @@ export function DBMLEditor({ session }: Props) {
 
   // y-monaco binding lifecycle. Bind once we have both an editor instance
   // and a collab session; tear down on either change or unmount.
+  //
+  // `editorMountId` is included so the effect re-runs when the editor mounts.
+  // The session typically arrives before Monaco finishes loading from the CDN,
+  // so on first run `editorRef.current` is null and we bail. When the editor
+  // mounts it bumps `editorMountId`, re-triggering this effect.
   //
   // MonacoBinding's constructor reconciles the two on first attach (Y.Text
   // wins): it calls `monacoModel.setValue(ytext.toString())`, which wipes the
@@ -130,12 +152,16 @@ export function DBMLEditor({ session }: Props) {
       binding.destroy();
       bindingRef.current = null;
     };
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, editorMountId]);
 
   // Mount/update/dispose the inline diff overlay based on review state.
   useEffect(() => {
     if (!monaco || !editorRef.current) return;
     if (review) {
+      // Kill any pending debounce so a stale setDbml doesn't fire during
+      // the review and cancel it (setDbml clears review when it's active).
+      debouncedSet.cancel();
       if (!diffControllerRef.current) {
         diffControllerRef.current = new InlineDiffController(
           editorRef.current,
@@ -152,7 +178,7 @@ export function DBMLEditor({ session }: Props) {
       diffControllerRef.current.dispose();
       diffControllerRef.current = null;
     }
-  }, [monaco, review]);
+  }, [monaco, review, debouncedSet]);
 
   useEffect(
     () => () => {
@@ -169,6 +195,7 @@ export function DBMLEditor({ session }: Props) {
       defineDbmlThemes(m);
       m.editor.setTheme(themeName);
       lastSyncedRef.current = ed.getValue();
+      setEditorMountId((c) => c + 1);
     },
     [themeName],
   );
