@@ -98,7 +98,7 @@ function buildParsedStatePartial(
   }
   const positions = { ...prevPositions };
   const { nodes, edges } = toFlow(result.schema, positions);
-  const finalNodes = placeNewTables(nodes, positions);
+  const finalNodes = placeNewTables(nodes, edges, positions);
   return {
     dbml: text,
     errors: [],
@@ -110,16 +110,28 @@ function buildParsedStatePartial(
 }
 
 /**
- * Place tables that have no saved position to the right of the existing
- * cluster, preserving every existing table's position untouched.
+ * Place tables that have no saved position, preserving every existing table's
+ * position untouched. Two regimes:
+ *  - Nothing placed yet (e.g. fresh schema, paste-of-many-tables, AI apply on
+ *    an empty doc): run dagre auto-layout so the diagram opens with a real
+ *    shape instead of one tall column.
+ *  - Some tables already placed: park new arrivals to the right of the
+ *    existing cluster — same as before, so manual layouts stay put.
  */
 function placeNewTables(
   nodes: Node<TableNodeData>[],
+  edges: Edge<RelationEdgeData>[],
   positions: Positions,
 ): Node<TableNodeData>[] {
   const placed = nodes.filter((n) => positions[n.id]);
   const unplaced = nodes.filter((n) => !positions[n.id]);
   if (unplaced.length === 0) return nodes;
+
+  if (placed.length === 0 && unplaced.length > 1) {
+    const laid = autoLayout(nodes, edges);
+    for (const n of laid) positions[n.id] = n.position;
+    return laid;
+  }
 
   let baseX = 0;
   let baseY = 0;
@@ -166,7 +178,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       finalNodes = autoLayout(nodes, edges);
       for (const n of finalNodes) positions[n.id] = n.position;
     } else {
-      finalNodes = placeNewTables(nodes, positions);
+      finalNodes = placeNewTables(nodes, edges, positions);
     }
     const perm = permissionFor(rec);
     set({
