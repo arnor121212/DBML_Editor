@@ -9,6 +9,7 @@ import {
   type TableNodeData,
 } from "@/lib/dbml/toFlow";
 import { autoLayout } from "@/lib/dbml/layout";
+import { removeTables } from "@/lib/dbml/removeTable";
 import { getActiveBackend, type SchemaRecord } from "@/lib/storage";
 import type { MyRole, PublicRole } from "@/lib/storage/types";
 import { permissionFor } from "@/lib/sharing/permissions";
@@ -60,6 +61,7 @@ interface SchemaState {
   reset: () => void;
   setName: (name: string) => void;
   setDbml: (text: string) => void;
+  deleteTables: (tableIds: string[]) => void;
   /** Apply DBML text from an external source (collab Y.Text observer). Skips
    *  the lastEditAt bump so we don't immediately auto-snapshot a remote edit
    *  on top of our own. */
@@ -238,6 +240,26 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     // (applyReview clears it before calling), so this only fires on manual edits.
     const reviewWasActive = prev.review !== null;
     const partial = buildParsedStatePartial(text, prev.positions);
+    set({
+      ...partial,
+      lastEditAt: Date.now(),
+      ...(reviewWasActive ? { review: null } : null),
+    });
+    void get().persist();
+  },
+
+  deleteTables(tableIds) {
+    const prev = get();
+    if (!prev.canEdit || tableIds.length === 0) return;
+
+    const newDbml = removeTables(prev.dbml, new Set(tableIds));
+    if (newDbml === prev.dbml) return;
+
+    const positions = { ...prev.positions };
+    for (const id of tableIds) delete positions[id];
+
+    const reviewWasActive = prev.review !== null;
+    const partial = buildParsedStatePartial(newDbml, positions);
     set({
       ...partial,
       lastEditAt: Date.now(),

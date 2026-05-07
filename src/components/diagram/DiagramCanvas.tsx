@@ -40,6 +40,7 @@ function CanvasInner({ peers, onCursorMove }: CanvasProps) {
   const edges = useSchemaStore((s) => s.edges);
   const setNodes = useSchemaStore((s) => s.setNodes);
   const updatePosition = useSchemaStore((s) => s.updatePosition);
+  const deleteTables = useSchemaStore((s) => s.deleteTables);
   const setHovered = useSchemaStore((s) => s.setHoveredColumn);
   const schemaId = useSchemaStore((s) => s.schemaId);
   const canEdit = useSchemaStore((s) => s.canEdit);
@@ -66,15 +67,33 @@ function CanvasInner({ peers, onCursorMove }: CanvasProps) {
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<TableNodeData>>[]) => {
-      setNodes((prev) => applyNodeChanges(changes, prev));
+      const removes: string[] = [];
+      const other: NodeChange<Node<TableNodeData>>[] = [];
+      for (const c of changes) {
+        if (c.type === "remove") {
+          removes.push(c.id);
+        } else {
+          other.push(c);
+        }
+      }
+
+      if (other.length > 0) {
+        setNodes((prev) => applyNodeChanges(other, prev));
+      }
+
       // Persist position only on drag end (no ongoing drags) to keep IDB writes cheap.
       for (const c of changes) {
         if (c.type === "position" && c.dragging === false && c.position) {
           updatePosition(c.id, c.position);
         }
       }
+
+      // Route node removals through the store so the DBML text is updated.
+      if (removes.length > 0) {
+        deleteTables(removes);
+      }
     },
-    [setNodes, updatePosition],
+    [setNodes, updatePosition, deleteTables],
   );
 
   const onNodeMouseLeave: NodeMouseHandler = useCallback(() => {
@@ -114,6 +133,7 @@ function CanvasInner({ peers, onCursorMove }: CanvasProps) {
         proOptions={proOptions}
         minZoom={0.2}
         maxZoom={2}
+        deleteKeyCode={canEdit ? ["Backspace", "Delete"] : null}
         nodesDraggable={canEdit}
         nodesConnectable={false}
         elementsSelectable
