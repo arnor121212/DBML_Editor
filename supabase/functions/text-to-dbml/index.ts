@@ -33,10 +33,10 @@ Modeling rules:
 - Only include tables, columns, and refs the user asked for or that are clearly implied. Do not invent extra entities.
 
 Iterative editing — when the user message contains a "Current DBML:" block:
-- Preserve EVERY existing top-level construct EXACTLY as written, byte-for-byte: every Table (with all columns, types, and constraints), every Ref, every Enum, every Project block, every TableGroup, every Note, AND every comment line (// …) and blank line. Do not rename, remove, reorder, restructure, reformat, or alter whitespace in any existing definition or comment.
-- Apply only the change the user describes by ADDING new constructs at the appropriate location (new tables go after existing ones).
-- If the change requires modifying an existing column (e.g. adding a new constraint), change only that one attribute — leave every other line byte-identical.
-- Return the COMPLETE updated DBML: every existing line preserved verbatim, plus your additions.`;
+- Default behavior is additive: preserve every existing top-level construct (Tables, Refs, Enums, Project blocks, TableGroups, Notes, comments, blank lines) byte-for-byte, and apply the user's change by ADDING new constructs at the appropriate location.
+- Honor explicit destructive requests. If the user says "delete X", "remove X", "drop X", "rewrite X", or otherwise unambiguously asks you to remove or replace a specific construct, do so — but ONLY touch what they named. Every other existing construct, comment, and blank line must remain byte-identical.
+- If the change requires modifying an existing column or attribute (e.g. adding a constraint), change only that one attribute and leave every other line byte-identical.
+- Return the COMPLETE updated DBML: every preserved line verbatim, plus any additions, minus only what the user explicitly asked to remove.`;
 
 interface RequestBody {
   prompt?: string;
