@@ -4,12 +4,24 @@ import type { ParseError, SchemaModel } from "@/lib/dbml/types";
 import { parseDbml } from "@/lib/dbml/parse";
 import {
   toFlow,
+  edgeSideKey,
+  type EdgeSide,
+  type EdgeSides,
   type Positions,
   type RelationEdgeData,
   type TableNodeData,
+  type Widths,
 } from "@/lib/dbml/toFlow";
 import { autoLayout } from "@/lib/dbml/layout";
 import { removeTables } from "@/lib/dbml/removeTable";
+import { renameTable as renameTableText } from "@/lib/dbml/renameTable";
+import { duplicateTableBlocks, nextAvailableName } from "@/lib/dbml/copyTable";
+import { appendRef } from "@/lib/dbml/addRef";
+import { removeRef } from "@/lib/dbml/removeRef";
+import {
+  replaceText as editorReplaceText,
+  revealLine as editorRevealLine,
+} from "@/lib/editor/editorBus";
 import { getActiveBackend, type SchemaRecord } from "@/lib/storage";
 import type { MyRole, PublicRole } from "@/lib/storage/types";
 import { permissionFor } from "@/lib/sharing/permissions";
@@ -48,6 +60,8 @@ interface SchemaState {
   nodes: Node<TableNodeData>[];
   edges: Edge<RelationEdgeData>[];
   positions: Positions;
+  widths: Widths;
+  edgeSides: EdgeSides;
   // UI
   hoveredColumnKey: string | null; // `${tableId}::${column}`
   loaded: boolean;
@@ -62,6 +76,40 @@ interface SchemaState {
   setName: (name: string) => void;
   setDbml: (text: string) => void;
   deleteTables: (tableIds: string[]) => void;
+  /** Rename a table by id; rewrites declaration + every ref that points at
+   *  it. Returns true on success, false if the new name conflicts or is
+   *  invalid. */
+  renameTable: (tableId: string, newName: string) => boolean;
+  /** Per-table width override (visual only — doesn't bump lastEditAt). */
+  setWidth: (tableId: string, width: number) => void;
+  /** Duplicate one or more tables. Pasted nodes land offset from the
+   *  originals; new ids are returned so the caller can update selection. */
+  duplicateTables: (tableIds: string[]) => string[];
+  /** Add a `Ref:` line for a connection drawn between two columns. The
+   *  sides record which edges of the tables the drag started/ended on
+   *  so the rendered arrow follows the drag direction. */
+  addRef: (
+    source: { tableId: string; column: string; side: EdgeSide },
+    target: { tableId: string; column: string; side: EdgeSide },
+  ) => void;
+  /** Remove the `Ref:` (or matching inline ref) connecting two columns. */
+  deleteRef: (
+    source: { tableId: string; column: string },
+    target: { tableId: string; column: string },
+  ) => void;
+  /** Move an existing relationship: relocate one or both endpoints. If
+   *  only the sides changed (same columns), only `edgeSides` is updated.
+   *  If a column or table changed, the DBML is rewritten. */
+  updateRef: (
+    oldEnds: {
+      source: { tableId: string; column: string };
+      target: { tableId: string; column: string };
+    },
+    newEnds: {
+      source: { tableId: string; column: string; side: EdgeSide };
+      target: { tableId: string; column: string; side: EdgeSide };
+    },
+  ) => void;
   /** Apply DBML text from an external source (collab Y.Text observer). Skips
    *  the lastEditAt bump so we don't immediately auto-snapshot a remote edit
    *  on top of our own. */
@@ -93,13 +141,20 @@ const EMPTY_SCHEMA: SchemaModel = { tables: [], refs: [], enums: [] };
 function buildParsedStatePartial(
   text: string,
   prevPositions: Positions,
+  prevWidths: Widths,
+  prevEdgeSides: EdgeSides,
 ): Partial<SchemaState> {
   const result = parseDbml(text);
   if (!result.ok) {
     return { dbml: text, errors: result.errors };
   }
   const positions = { ...prevPositions };
-  const { nodes, edges } = toFlow(result.schema, positions);
+  const { nodes, edges } = toFlow(
+    result.schema,
+    positions,
+    prevWidths,
+    prevEdgeSides,
+  );
   const finalNodes = placeNewTables(nodes, edges, positions);
   return {
     dbml: text,
@@ -164,6 +219,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   nodes: [],
   edges: [],
   positions: {},
+  widths: {},
+  edgeSides: {},
   hoveredColumnKey: null,
   loaded: false,
   lastEditAt: 0,
@@ -174,7 +231,9 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const schema = result.ok ? result.schema : EMPTY_SCHEMA;
     const errors = result.ok ? [] : result.errors;
     const positions = { ...rec.positions };
-    const { nodes, edges } = toFlow(schema, positions);
+    const widths = { ...(rec.widths ?? {}) };
+    const edgeSides = { ...(rec.edgeSides ?? {}) };
+    const { nodes, edges } = toFlow(schema, positions, widths, edgeSides);
     let finalNodes = nodes;
     if (Object.keys(positions).length === 0 && nodes.length > 0) {
       finalNodes = autoLayout(nodes, edges);
@@ -198,6 +257,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       nodes: finalNodes,
       edges,
       positions,
+      widths,
+      edgeSides,
       loaded: true,
       hoveredColumnKey: null,
       lastEditAt: 0,
@@ -221,6 +282,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       nodes: [],
       edges: [],
       positions: {},
+      widths: {},
+      edgeSides: {},
       hoveredColumnKey: null,
       loaded: false,
       lastEditAt: 0,
@@ -239,7 +302,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     // text passed back through here from applyReview already has review === null
     // (applyReview clears it before calling), so this only fires on manual edits.
     const reviewWasActive = prev.review !== null;
-    const partial = buildParsedStatePartial(text, prev.positions);
+    const partial = buildParsedStatePartial(text, prev.positions, prev.widths, prev.edgeSides);
     set({
       ...partial,
       lastEditAt: Date.now(),
@@ -255,11 +318,24 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const newDbml = removeTables(prev.dbml, new Set(tableIds));
     if (newDbml === prev.dbml) return;
 
+    // Try to push the change through Monaco so it lands on the editor's
+    // undo stack — Ctrl+Z then restores the deleted table.
+    // Positions are intentionally *not* cleared so an undo restores the
+    // table to its original spot.
+    if (editorReplaceText(newDbml)) {
+      // The editor's onChange → debouncedSet → setDbml pipeline rebuilds
+      // schema/nodes/edges. Nothing else to do here.
+      return;
+    }
+
+    // Editor not mounted (e.g. side-panel closed) — fall back to direct
+    // store mutation. Undo isn't available in this path, so prune the
+    // deleted tables' positions; otherwise re-creating a table with the
+    // same name would inherit the stale spot.
     const positions = { ...prev.positions };
     for (const id of tableIds) delete positions[id];
-
     const reviewWasActive = prev.review !== null;
-    const partial = buildParsedStatePartial(newDbml, positions);
+    const partial = buildParsedStatePartial(newDbml, positions, prev.widths, prev.edgeSides);
     set({
       ...partial,
       lastEditAt: Date.now(),
@@ -268,17 +344,250 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     void get().persist();
   },
 
+  renameTable(tableId, rawNewName) {
+    const prev = get();
+    if (!prev.canEdit) return false;
+    const newName = rawNewName.trim();
+    if (!newName) return false;
+    const dot = tableId.indexOf(".");
+    const oldSchema = dot >= 0 ? tableId.slice(0, dot) : "public";
+    const oldName = dot >= 0 ? tableId.slice(dot + 1) : tableId;
+    if (oldName === newName) return false;
+    // Conflict check: refuse if a table with the same id already exists.
+    const newId = `${oldSchema}.${newName}`;
+    if (prev.schema.tables.some((t) => t.id === newId)) return false;
+
+    const newDbml = renameTableText(prev.dbml, tableId, newName);
+    if (newDbml === prev.dbml) return false;
+
+    // Migrate positions/widths to the new id so the table doesn't jump.
+    const positions = { ...prev.positions };
+    const widths = { ...prev.widths };
+    if (positions[tableId]) {
+      positions[newId] = positions[tableId];
+      delete positions[tableId];
+    }
+    if (widths[tableId] !== undefined) {
+      widths[newId] = widths[tableId];
+      delete widths[tableId];
+    }
+
+    // Rebuild schema/nodes/edges synchronously regardless of which path
+    // we take. The editor path *also* triggers a deferred setDbml via
+    // Monaco's onChange → debouncedSet; that re-runs buildParsedStatePartial
+    // but is idempotent (same DBML, same positions/widths). Doing it
+    // synchronously closes a 180ms window where the diagram still shows
+    // the old node id — if the user dragged the just-renamed node in that
+    // window, updatePosition would write back under the stale id.
+    const partial = buildParsedStatePartial(newDbml, positions, widths, get().edgeSides);
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, positions, widths, lastEditAt: Date.now() });
+      return true;
+    }
+    set({ ...partial, positions, widths, lastEditAt: Date.now() });
+    void get().persist();
+    return true;
+  },
+
+  setWidth(tableId, width) {
+    const prev = get();
+    if (!prev.canEdit) return;
+    const widths = { ...prev.widths, [tableId]: Math.round(width) };
+    // Update the matching node's style in place so React Flow picks it up
+    // without a full schema rebuild.
+    const nodes = prev.nodes.map((n) =>
+      n.id === tableId
+        ? { ...n, style: { ...(n.style ?? {}), width: Math.round(width) } }
+        : n,
+    );
+    set({ widths, nodes });
+    void get().persist();
+  },
+
+  duplicateTables(tableIds) {
+    const prev = get();
+    if (!prev.canEdit || tableIds.length === 0) return [];
+    // Refuse to paste while the DBML can't parse — `findTableBlock` is run
+    // against the broken source text and would silently fail to locate the
+    // requested ids. Without this guard the user would see no feedback.
+    if (prev.errors.length > 0) return [];
+
+    // Compute fresh names + the resulting source→new id map.
+    const existingIds = new Set(prev.schema.tables.map((t) => t.id));
+    const specs: { sourceId: string; newName: string }[] = [];
+    const oldToNew: Record<string, string> = {};
+    for (const id of tableIds) {
+      const tbl = prev.schema.tables.find((t) => t.id === id);
+      if (!tbl) continue;
+      const newName = nextAvailableName(tbl.name, tbl.schema, existingIds);
+      const newId = `${tbl.schema || "public"}.${newName}`;
+      existingIds.add(newId); // so later items in the same paste don't collide
+      oldToNew[id] = newId;
+      specs.push({ sourceId: id, newName });
+    }
+    if (specs.length === 0) return [];
+
+    const { text: newDbml, newTableIds } = duplicateTableBlocks(prev.dbml, specs);
+    if (newDbml === prev.dbml) return [];
+
+    // Place each pasted node 40px right + down of its source.
+    const positions = { ...prev.positions };
+    const widths = { ...prev.widths };
+    for (const oldId of Object.keys(oldToNew)) {
+      const newId = oldToNew[oldId];
+      const src = positions[oldId];
+      if (src) positions[newId] = { x: src.x + 40, y: src.y + 40 };
+      if (widths[oldId] !== undefined) widths[newId] = widths[oldId];
+    }
+
+    const partial = buildParsedStatePartial(newDbml, positions, widths, get().edgeSides);
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, positions, widths, lastEditAt: Date.now() });
+      return newTableIds;
+    }
+    set({ ...partial, positions, widths, lastEditAt: Date.now() });
+    void get().persist();
+    return newTableIds;
+  },
+
+  addRef(source, target) {
+    const prev = get();
+    if (!prev.canEdit) return;
+    const { text: newDbml, line } = appendRef(prev.dbml, source, target);
+    // Persist which sides the user dragged from/to so the rendered edge
+    // mirrors the drag direction even after the DBML round-trip.
+    const sideKey = edgeSideKey(
+      source.tableId,
+      source.column,
+      target.tableId,
+      target.column,
+    );
+    const edgeSides: EdgeSides = {
+      ...prev.edgeSides,
+      [sideKey]: { srcSide: source.side, tgtSide: target.side },
+    };
+    if (newDbml === prev.dbml) {
+      // Already exists — just update the side preference and reveal.
+      const partial = buildParsedStatePartial(
+        prev.dbml,
+        prev.positions,
+        prev.widths,
+        edgeSides,
+      );
+      set({ ...partial, edgeSides });
+      editorRevealLine(line);
+      void get().persist();
+      return;
+    }
+    const partial = buildParsedStatePartial(newDbml, prev.positions, prev.widths, edgeSides);
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, edgeSides, lastEditAt: Date.now() });
+      editorRevealLine(line);
+      return;
+    }
+    set({ ...partial, edgeSides, lastEditAt: Date.now() });
+    void get().persist();
+  },
+
+  deleteRef(source, target) {
+    const prev = get();
+    if (!prev.canEdit) return;
+    const newDbml = removeRef(prev.dbml, source, target);
+    if (newDbml === prev.dbml) return;
+    const edgeSides = { ...prev.edgeSides };
+    delete edgeSides[
+      edgeSideKey(source.tableId, source.column, target.tableId, target.column)
+    ];
+    const partial = buildParsedStatePartial(
+      newDbml,
+      prev.positions,
+      prev.widths,
+      edgeSides,
+    );
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, edgeSides, lastEditAt: Date.now() });
+      return;
+    }
+    set({ ...partial, edgeSides, lastEditAt: Date.now() });
+    void get().persist();
+  },
+
+  updateRef(oldEnds, newEnds) {
+    const prev = get();
+    if (!prev.canEdit) return;
+    const sameEndpoints =
+      oldEnds.source.tableId === newEnds.source.tableId &&
+      oldEnds.source.column === newEnds.source.column &&
+      oldEnds.target.tableId === newEnds.target.tableId &&
+      oldEnds.target.column === newEnds.target.column;
+
+    const newSideKey = edgeSideKey(
+      newEnds.source.tableId,
+      newEnds.source.column,
+      newEnds.target.tableId,
+      newEnds.target.column,
+    );
+
+    if (sameEndpoints) {
+      // Only the sides changed — pure visual update, no DBML rewrite.
+      const edgeSides: EdgeSides = {
+        ...prev.edgeSides,
+        [newSideKey]: {
+          srcSide: newEnds.source.side,
+          tgtSide: newEnds.target.side,
+        },
+      };
+      const partial = buildParsedStatePartial(
+        prev.dbml,
+        prev.positions,
+        prev.widths,
+        edgeSides,
+      );
+      set({ ...partial, edgeSides });
+      void get().persist();
+      return;
+    }
+
+    // Endpoint changed: remove old + append new in one Monaco edit.
+    const removed = removeRef(prev.dbml, oldEnds.source, oldEnds.target);
+    const { text: newDbml } = appendRef(removed, newEnds.source, newEnds.target);
+    const oldSideKey = edgeSideKey(
+      oldEnds.source.tableId,
+      oldEnds.source.column,
+      oldEnds.target.tableId,
+      oldEnds.target.column,
+    );
+    const edgeSides: EdgeSides = { ...prev.edgeSides };
+    delete edgeSides[oldSideKey];
+    edgeSides[newSideKey] = {
+      srcSide: newEnds.source.side,
+      tgtSide: newEnds.target.side,
+    };
+    const partial = buildParsedStatePartial(
+      newDbml,
+      prev.positions,
+      prev.widths,
+      edgeSides,
+    );
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, edgeSides, lastEditAt: Date.now() });
+      return;
+    }
+    set({ ...partial, edgeSides, lastEditAt: Date.now() });
+    void get().persist();
+  },
+
   applyExternalDbml(text) {
     const prev = get();
-    const partial = buildParsedStatePartial(text, prev.positions);
+    const partial = buildParsedStatePartial(text, prev.positions, prev.widths, prev.edgeSides);
     set(partial);
     void get().persist();
   },
 
   applyExternalPositions(positions) {
     const merged = { ...positions };
-    const { schema } = get();
-    const { nodes, edges } = toFlow(schema, merged);
+    const { schema, widths, edgeSides } = get();
+    const { nodes, edges } = toFlow(schema, merged, widths, edgeSides);
     set({ positions: merged, nodes, edges });
     void get().persist();
   },
@@ -342,7 +651,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       return;
     }
 
-    const partial = buildParsedStatePartial(text, prev.positions);
+    const partial = buildParsedStatePartial(text, prev.positions, prev.widths, prev.edgeSides);
     set({ review: newReview, ...partial });
     void get().persist();
   },
@@ -359,7 +668,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       set({ review: newReview });
       return;
     }
-    const partial = buildParsedStatePartial(text, prev.positions);
+    const partial = buildParsedStatePartial(text, prev.positions, prev.widths, prev.edgeSides);
     set({ review: newReview, ...partial });
     void get().persist();
   },
@@ -380,7 +689,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       set({ review: null });
       return;
     }
-    const partial = buildParsedStatePartial(text, prev.positions);
+    const partial = buildParsedStatePartial(text, prev.positions, prev.widths, prev.edgeSides);
     set({ review: null, ...partial });
     void get().persist();
   },
@@ -393,7 +702,12 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       set({ review: null });
       return;
     }
-    const partial = buildParsedStatePartial(review.baseDbml, prev.positions);
+    const partial = buildParsedStatePartial(
+      review.baseDbml,
+      prev.positions,
+      prev.widths,
+      prev.edgeSides,
+    );
     set({ review: null, ...partial });
     void get().persist();
   },
@@ -410,6 +724,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
         name: s.name,
         dbml: s.dbml,
         positions: s.positions,
+        widths: s.widths,
+        edgeSides: s.edgeSides,
         createdAt: s.createdAt || Date.now(),
         updatedAt: Date.now(),
       });

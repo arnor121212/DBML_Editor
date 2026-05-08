@@ -1,32 +1,24 @@
 /**
- * Remove tables (and their associated standalone Ref declarations) from raw
- * DBML text.  This is pure text surgery — no AST round-trip — so the result
- * preserves comments, formatting, and anything the parser doesn't model.
+ * Remove tables (and their associated Ref declarations) from raw DBML text.
+ * This is pure text surgery — no AST round-trip — so the result preserves
+ * comments, formatting, and anything the parser doesn't model.
  *
- * Inline `[ref: > ...]` annotations inside surviving tables are left alone —
- * dangling refs are harmless and the parser ignores them.
+ * Inline `[ref: > ...]` annotations inside *surviving* tables that point at
+ * a *deleted* table are stripped from their bracket attribute lists; the
+ * column itself stays. Bare `[]` after the strip is removed as well.
  */
+
+import {
+  TABLE_RE,
+  endpointTableId,
+  stripInlineRefsToAny,
+  unquote,
+} from "./dbmlTokens";
 
 /** Build a table ID the same way parse.ts does. */
 function makeTableId(schema: string, name: string): string {
   return `${schema || "public"}.${name}`;
 }
-
-/** Strip surrounding double-quotes if present. */
-function unquote(s: string): string {
-  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"')
-    return s.slice(1, -1);
-  return s;
-}
-
-/**
- * Regex for a Table declaration line.
- * Captures the first identifier (schema or name) in group 1 and an optional
- * dot-separated second identifier (name if schema was given) in group 2.
- * Handles both quoted (`"my_schema"."my_table"`) and unquoted names.
- */
-const TABLE_RE =
-  /^Table\s+("(?:[^"]*)"|\w+)(?:\.("(?:[^"]*)"|\w+))?/i;
 
 /**
  * Parse a "Table …" line and return the table ID (`schema.name`) and whether
@@ -48,31 +40,6 @@ function parseTableLine(
     name = unquote(m[1]);
   }
   return { id: makeTableId(schema, name), hasOpenBrace: trimmed.includes("{") };
-}
-
-/**
- * Given a ref endpoint like `public.users.id` or `users.(id, name)`, return
- * the table ID (`schema.name`).
- */
-function endpointTableId(endpoint: string): string | null {
-  const s = endpoint.trim();
-  const paren = s.indexOf("(");
-  const before = paren >= 0 ? s.slice(0, paren) : s;
-  const parts = before
-    .split(".")
-    .map((p) => unquote(p.trim()))
-    .filter(Boolean);
-
-  if (paren >= 0) {
-    // Composite key: schema.table.( or table.(
-    if (parts.length >= 2) return makeTableId(parts[0], parts[1]);
-    if (parts.length === 1) return makeTableId("public", parts[0]);
-  } else {
-    // Simple: schema.table.column or table.column
-    if (parts.length >= 3) return makeTableId(parts[0], parts[1]);
-    if (parts.length === 2) return makeTableId("public", parts[0]);
-  }
-  return null;
 }
 
 /** Matches `endpoint <op> endpoint` where op is `>`, `<`, `-`, or `<>`. */
@@ -193,7 +160,13 @@ export function removeTables(dbml: string, tableIds: Set<string>): string {
   }
 
   // ── Rebuild & clean up consecutive blank lines ────────────────
-  const result = lines.filter((_, idx) => keep[idx]);
+  // Strip inline `[ref: > deletedTable.col]` segments from any surviving
+  // line; safe on non-bracket lines (the regex doesn't match) and on
+  // brackets without a `ref:` segment (the filter is a no-op).
+  const stripped = lines.map((line, idx) =>
+    keep[idx] ? stripInlineRefsToAny(line, tableIds) : line,
+  );
+  const result = stripped.filter((_, idx) => keep[idx]);
 
   const cleaned: string[] = [];
   let blanks = 0;

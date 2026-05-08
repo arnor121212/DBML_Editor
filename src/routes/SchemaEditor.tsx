@@ -185,6 +185,12 @@ export function SchemaEditor() {
           <DiagramCanvas
             peers={session ? peers : undefined}
             onCursorMove={session ? setCursor : undefined}
+            onRequestEditorOpen={() => {
+              if (!editorOpen) {
+                setEditorOpen(true);
+                window.localStorage.setItem(STORAGE_EDITOR_OPEN, "1");
+              }
+            }}
           />
         )}
       </div>

@@ -20,6 +20,13 @@ export interface SchemaRecord {
   name: string;
   dbml: string;
   positions: Positions;
+  /** Per-table width overrides. Optional — old records and the cloud
+   *  backend read as undefined (treated as {}). */
+  widths?: Record<string, number>;
+  /** Per-edge side preferences. Key: `<srcTableId>.<srcCol>><tgtTableId>.<tgtCol>`.
+   *  Value: which side of each table the edge attaches to. When absent the
+   *  edge defaults to right→left (the original render direction). */
+  edgeSides?: Record<string, { srcSide: "l" | "r"; tgtSide: "l" | "r" }>;
   createdAt: number;
   updatedAt: number;
   // Cloud-only fields. Undefined for purely-local records.

@@ -1,57 +1,99 @@
-import { memo, useMemo } from "react";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Handle,
+  NodeResizeControl,
+  Position,
+  ResizeControlVariant,
+  type Node,
+  type NodeProps,
+  type ResizeParams,
+} from "@xyflow/react";
 import {
   KeyRound,
   Link2,
   Asterisk,
   ShieldCheck,
 } from "lucide-react";
-import type { TableNodeData } from "@/lib/dbml/toFlow";
+import {
+  MAX_NODE_WIDTH,
+  MIN_NODE_WIDTH,
+  type TableNodeData,
+} from "@/lib/dbml/toFlow";
 import { typeColorVar } from "@/lib/dbml/typeColor";
 import { pickHeaderColor } from "@/lib/dbml/palette";
 import { useSchemaStore } from "@/store/schemaStore";
 import { cn } from "@/lib/utils";
-
-const NODE_WIDTH = 280;
+import { toast } from "sonner";
 
 /**
- * Invisible 1×1 handle. Rendered inside a `position: relative` row, so its
- * default vertical center (top: 50%) lands on the row's center — no offset
- * math needed. Positioned at the row's left/right edge by React Flow.
+ * Connection handle. Rendered inside a `position: relative` row, so its
+ * default vertical center (top: 50%) lands on the row's center.
+ *
+ * Visible only when the row is hovered (`opacity-0` → `opacity-100` via the
+ * `group-hover/row` Tailwind variant) — keeps the diagram clean at rest
+ * while still giving users something concrete to grab when drawing a ref.
+ *
+ * The 1×1 size still applies when hidden so layout-positioned siblings
+ * don't shift between hover states; the visual dot is an absolutely
+ * positioned pseudo-child sized via the className.
  */
 function InlineHandle({
   type,
   position,
   id,
+  connectable,
 }: {
   type: "source" | "target";
   position: Position;
   id: string;
+  connectable: boolean;
 }) {
   return (
     <Handle
       type={type}
       position={position}
       id={id}
-      style={{
-        background: "transparent",
-        border: "none",
-        width: 1,
-        height: 1,
-        minWidth: 1,
-        minHeight: 1,
-      }}
-      isConnectable={false}
+      isConnectable={connectable}
+      className={cn(
+        "!h-2.5 !w-2.5 !border-2 !border-primary/70 !bg-background opacity-0 transition-opacity",
+        // Visible whenever the table is hovered (not just the row) — moving
+        // the cursor onto the dot itself can leave the row's hover region.
+        connectable && "group-hover/table:opacity-100",
+        !connectable && "!pointer-events-none",
+      )}
     />
   );
 }
 
 type TableNodeProps = NodeProps<Node<TableNodeData>>;
 
-function TableNodeInner({ data, selected }: TableNodeProps) {
+function TableNodeInner({ id, data, selected }: TableNodeProps) {
   const setHovered = useSchemaStore((s) => s.setHoveredColumn);
   const hoveredKey = useSchemaStore((s) => s.hoveredColumnKey);
   const edges = useSchemaStore((s) => s.edges);
+  const renameTable = useSchemaStore((s) => s.renameTable);
+  const setWidth = useSchemaStore((s) => s.setWidth);
+  const canEdit = useSchemaStore((s) => s.canEdit);
+
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(data.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Reset draft if the underlying name changes (e.g. external edit).
+  useEffect(() => {
+    setDraftName(data.name);
+  }, [data.name]);
+
+  useEffect(() => {
+    if (renaming) inputRef.current?.select();
+  }, [renaming]);
 
   const headerColor = useMemo(
     () => pickHeaderColor(data.name, data.headerColor),
@@ -70,15 +112,65 @@ function TableNodeInner({ data, selected }: TableNodeProps) {
     );
   }, [hoveredKey, data.id, edges]);
 
+  const commitRename = useCallback(() => {
+    const next = draftName.trim();
+    setRenaming(false);
+    if (!next || next === data.name) {
+      setDraftName(data.name);
+      return;
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(next)) {
+      toast.error("Invalid table name", {
+        description: "Use letters, digits, and underscores. Must start with a letter or underscore.",
+      });
+      setDraftName(data.name);
+      return;
+    }
+    const ok = renameTable(id, next);
+    if (!ok) {
+      toast.error("Couldn't rename table", {
+        description: `A table named "${next}" already exists.`,
+      });
+      setDraftName(data.name);
+    }
+  }, [draftName, data.name, id, renameTable]);
+
+  const onResizeEnd = useCallback(
+    (_e: unknown, params: ResizeParams) => {
+      setWidth(id, params.width);
+    },
+    [id, setWidth],
+  );
+
   return (
     <div
       className={cn(
-        "group/table relative w-[280px] select-none rounded-xl border border-border bg-card text-card-foreground shadow-[0_1px_0_0_color-mix(in_oklab,white_4%,transparent)_inset,0_8px_30px_-12px_rgba(0,0,0,0.5)] transition-[opacity,transform,box-shadow] duration-200",
+        "group/table relative h-full w-full select-none rounded-xl border border-border bg-card text-card-foreground shadow-[0_1px_0_0_color-mix(in_oklab,white_4%,transparent)_inset,0_8px_30px_-12px_rgba(0,0,0,0.5)] transition-[opacity,transform,box-shadow] duration-200",
         selected && "ring-2 ring-primary/60",
         isDimmed && "opacity-30",
       )}
-      style={{ width: NODE_WIDTH }}
     >
+      {canEdit && (
+        <NodeResizeControl
+          position="right"
+          variant={ResizeControlVariant.Line}
+          minWidth={MIN_NODE_WIDTH}
+          maxWidth={MAX_NODE_WIDTH}
+          onResizeEnd={onResizeEnd}
+          style={{
+            background: "transparent",
+            border: "none",
+            width: 6,
+            right: -3,
+          }}
+        >
+          <div
+            className="h-full w-full cursor-ew-resize bg-transparent transition-colors hover:bg-primary/30"
+            aria-label="Resize table"
+          />
+        </NodeResizeControl>
+      )}
+
       {/* Colored header */}
       <div
         className="relative flex h-11 items-center gap-2 overflow-hidden rounded-t-[11px] px-3"
@@ -91,23 +183,59 @@ function TableNodeInner({ data, selected }: TableNodeProps) {
           className="absolute left-0 top-0 h-full w-1"
           style={{ background: headerColor }}
         />
-        <span className="ml-1 truncate font-mono text-[13px] font-semibold tracking-tight text-foreground">
-          {data.schema && data.schema !== "public" && (
-            <span className="font-normal text-muted-foreground">{data.schema}.</span>
-          )}
-          {data.name}
-        </span>
-        {data.note && (
+        {renaming ? (
+          <input
+            ref={inputRef}
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              if (e.key === "Escape") {
+                setDraftName(data.name);
+                setRenaming(false);
+              }
+              // Don't let the key bubble — Delete/Backspace would otherwise
+              // be consumed by React Flow as a node-delete.
+              e.stopPropagation();
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            className="ml-1 min-w-0 flex-1 rounded-sm border border-primary/40 bg-background/80 px-1 font-mono text-[13px] font-semibold tracking-tight text-foreground outline-none focus:border-primary"
+          />
+        ) : (
+          <span
+            className={cn(
+              "ml-1 min-w-0 truncate font-mono text-[13px] font-semibold tracking-tight text-foreground",
+              canEdit && "cursor-text",
+            )}
+            title={canEdit ? "Double-click to rename" : data.name}
+            onDoubleClick={(e) => {
+              if (!canEdit) return;
+              e.stopPropagation();
+              setDraftName(data.name);
+              setRenaming(true);
+            }}
+          >
+            {data.schema && data.schema !== "public" && (
+              <span className="font-normal text-muted-foreground">{data.schema}.</span>
+            )}
+            {data.name}
+          </span>
+        )}
+        {!renaming && data.note && (
           <span className="ml-auto truncate text-[11px] text-muted-foreground">
             {data.note}
           </span>
         )}
-        <span
-          className="ml-auto rounded-full border border-border/70 bg-background/40 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground"
-          aria-label={`${data.columns.length} columns`}
-        >
-          {data.columns.length}
-        </span>
+        {!renaming && (
+          <span
+            className="ml-auto rounded-full border border-border/70 bg-background/40 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground"
+            aria-label={`${data.columns.length} columns`}
+          >
+            {data.columns.length}
+          </span>
+        )}
       </div>
 
       {/* Column rows */}
@@ -128,15 +256,35 @@ function TableNodeInner({ data, selected }: TableNodeProps) {
               onMouseEnter={() => setHovered(rowKey)}
               onMouseLeave={() => setHovered(null)}
             >
+              {/* Four stacked handles per row — source+target on each side.
+               *  React Flow's loose connectionMode lets the user drag in any
+               *  direction; the handle the drag started on becomes the
+               *  source, the drop target becomes target. The four IDs let
+               *  toFlow attach a parsed edge to whichever sides match the
+               *  user's recorded preference. */}
+              <InlineHandle
+                type="source"
+                position={Position.Left}
+                id={`${col.name}.source.l`}
+                connectable={canEdit}
+              />
               <InlineHandle
                 type="target"
                 position={Position.Left}
-                id={`${col.name}.target`}
+                id={`${col.name}.target.l`}
+                connectable={canEdit}
               />
               <InlineHandle
                 type="source"
                 position={Position.Right}
-                id={`${col.name}.source`}
+                id={`${col.name}.source.r`}
+                connectable={canEdit}
+              />
+              <InlineHandle
+                type="target"
+                position={Position.Right}
+                id={`${col.name}.target.r`}
+                connectable={canEdit}
               />
 
               {/* PK / FK glyph */}

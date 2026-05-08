@@ -8,6 +8,7 @@ import {
   registerDbmlLanguage,
 } from "./dbmlLanguage";
 import { InlineDiffController } from "./inlineDiffController";
+import { registerEditor, unregisterEditor } from "@/lib/editor/editorBus";
 import { useTheme } from "@/lib/theme";
 import { useSchemaStore } from "@/store/schemaStore";
 import { debounce } from "@/lib/utils";
@@ -195,10 +196,20 @@ export function DBMLEditor({ session }: Props) {
       defineDbmlThemes(m);
       m.editor.setTheme(themeName);
       lastSyncedRef.current = ed.getValue();
+      registerEditor(ed, m);
       setEditorMountId((c) => c + 1);
     },
     [themeName],
   );
+
+  // Unregister this editor from the bus when DBMLEditor unmounts so the
+  // diagram falls back to direct store mutations while no editor exists.
+  useEffect(() => {
+    return () => {
+      const ed = editorRef.current;
+      if (ed) unregisterEditor(ed);
+    };
+  }, []);
 
   const handleChange = useCallback(
     (value: string | undefined) => {
