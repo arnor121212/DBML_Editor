@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import {
   Copy,
+  FolderInput,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -23,9 +24,11 @@ interface Props {
   onRename: (s: SchemaSummary) => void;
   onDuplicate: (s: SchemaSummary) => void;
   onDelete: (s: SchemaSummary) => void;
+  /** When provided, a "Move to project…" item is shown in the dropdown. */
+  onMove?: (s: SchemaSummary) => void;
 }
 
-export function SchemaCard({ schema, onRename, onDuplicate, onDelete }: Props) {
+export function SchemaCard({ schema, onRename, onDuplicate, onDelete, onMove }: Props) {
   return (
     <Card className="group/card relative overflow-hidden p-0 transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-[0_18px_40px_-20px_color-mix(in_oklab,var(--color-primary)_45%,transparent)]">
       <Link
@@ -65,6 +68,11 @@ export function SchemaCard({ schema, onRename, onDuplicate, onDelete }: Props) {
             <DropdownMenuItem onClick={() => onDuplicate(schema)}>
               <Copy /> Duplicate
             </DropdownMenuItem>
+            {onMove && (
+              <DropdownMenuItem onClick={() => onMove(schema)}>
+                <FolderInput /> Move to project…
+              </DropdownMenuItem>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"

@@ -29,9 +29,12 @@ type Template = "blank" | "ecommerce";
 
 export function NewSchemaDialog({
   trigger,
+  projectId,
   onCreated,
 }: {
   trigger?: React.ReactNode;
+  /** Project the new schema should belong to. */
+  projectId: string;
   onCreated?: (rec: SchemaRecord) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,6 +51,7 @@ export function NewSchemaDialog({
       name: name.trim() || "Untitled schema",
       dbml: template === "ecommerce" ? ECOMMERCE_DBML : BLANK_DBML,
       positions: {},
+      projectId,
       createdAt: now,
       updatedAt: now,
     };

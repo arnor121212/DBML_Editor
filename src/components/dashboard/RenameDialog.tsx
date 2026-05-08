@@ -15,9 +15,29 @@ interface Props {
   initialName: string;
   onClose: () => void;
   onConfirm: (name: string) => void | Promise<void>;
+  /** Title above the input. Default: "Rename schema". */
+  title?: string;
+  /** Label above the input. Default: "Name". */
+  label?: string;
+  /** Submit button label. Default: "Save". */
+  submitLabel?: string;
+  /** What to substitute when the input is blank. Default: "Untitled schema". */
+  fallback?: string;
+  /** Placeholder for the input. */
+  placeholder?: string;
 }
 
-export function RenameDialog({ open, initialName, onClose, onConfirm }: Props) {
+export function RenameDialog({
+  open,
+  initialName,
+  onClose,
+  onConfirm,
+  title = "Rename schema",
+  label = "Name",
+  submitLabel = "Save",
+  fallback = "Untitled schema",
+  placeholder,
+}: Props) {
   const [name, setName] = useState(initialName);
 
   useEffect(() => {
@@ -25,7 +45,7 @@ export function RenameDialog({ open, initialName, onClose, onConfirm }: Props) {
   }, [open, initialName]);
 
   async function submit() {
-    const trimmed = name.trim() || "Untitled schema";
+    const trimmed = name.trim() || fallback;
     await onConfirm(trimmed);
     onClose();
   }
@@ -34,21 +54,22 @@ export function RenameDialog({ open, initialName, onClose, onConfirm }: Props) {
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename schema</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-2 py-2">
-          <Label htmlFor="rename-name">Name</Label>
+          <Label htmlFor="rename-name">{label}</Label>
           <Input
             id="rename-name"
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submit()}
+            placeholder={placeholder}
           />
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit}>Save</Button>
+          <Button onClick={submit}>{submitLabel}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

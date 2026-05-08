@@ -10,9 +10,14 @@ import {
 
 interface Props {
   open: boolean;
+  /** Highlighted entity name shown inside the description. */
   schemaName: string;
   onClose: () => void;
   onConfirm: () => void | Promise<void>;
+  /** Override for the dialog title. Default: "Delete this schema?" */
+  title?: string;
+  /** Trailing copy after the highlighted name. Default: "will be permanently removed. This action can't be undone." */
+  trailing?: string;
 }
 
 export function DeleteConfirmDialog({
@@ -20,15 +25,17 @@ export function DeleteConfirmDialog({
   schemaName,
   onClose,
   onConfirm,
+  title = "Delete this schema?",
+  trailing = "will be permanently removed. This action can't be undone.",
 }: Props) {
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Delete this schema?</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            <span className="font-medium text-foreground">{schemaName}</span> will
-            be permanently removed. This action can&apos;t be undone.
+            <span className="font-medium text-foreground">{schemaName}</span>{" "}
+            {trailing}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

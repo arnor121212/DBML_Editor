@@ -1,80 +1,92 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Github, Sparkles } from "lucide-react";
+import { Github, Sparkles, FolderPlus } from "lucide-react";
 import { toast } from "sonner";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { Button } from "@/components/ui/button";
-import { SchemaCard } from "@/components/dashboard/SchemaCard";
-import { NewSchemaDialog } from "@/components/dashboard/NewSchemaDialog";
+import { ProjectCard } from "@/components/dashboard/ProjectCard";
 import { RenameDialog } from "@/components/dashboard/RenameDialog";
 import { DeleteConfirmDialog } from "@/components/dashboard/DeleteConfirmDialog";
 import { MigrationPrompt } from "@/components/auth/MigrationPrompt";
-import { useStorage, type SchemaSummary } from "@/lib/storage";
+import {
+  makeId,
+  useStorage,
+  type ProjectRecord,
+  type ProjectSummary,
+} from "@/lib/storage";
 import { useAuth } from "@/lib/auth/AuthProvider";
 import { formatError } from "@/lib/utils";
 
 export function Dashboard() {
   const storage = useStorage();
   const { user } = useAuth();
-  const [schemas, setSchemas] = useState<SchemaSummary[] | null>(null);
-  const [renaming, setRenaming] = useState<SchemaSummary | null>(null);
-  const [deleting, setDeleting] = useState<SchemaSummary | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  const [renaming, setRenaming] = useState<ProjectSummary | null>(null);
+  const [deleting, setDeleting] = useState<ProjectSummary | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const list = await storage.list();
-      setSchemas(list);
+      const list = await storage.listProjects();
+      setProjects(list);
     } catch (e) {
-      toast.error("Couldn't load schemas", { description: formatError(e) });
-      setSchemas([]);
+      toast.error("Couldn't load projects", { description: formatError(e) });
+      setProjects([]);
     }
   }, [storage]);
 
   useEffect(() => {
-    setSchemas(null);
+    setProjects(null);
     void refresh();
   }, [refresh]);
+
+  async function handleCreate(name: string) {
+    const now = Date.now();
+    const rec: ProjectRecord = {
+      id: makeId(),
+      name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await storage.putProject(rec);
+      toast.success("Project created");
+      await refresh();
+    } catch (e) {
+      toast.error("Couldn't create project", { description: formatError(e) });
+    }
+  }
 
   async function handleRename(name: string) {
     if (!renaming) return;
     try {
-      const rec = await storage.get(renaming.id);
+      const rec = await storage.getProject(renaming.id);
       if (!rec) return;
-      await storage.put({ ...rec, name, updatedAt: Date.now() });
+      await storage.putProject({ ...rec, name, updatedAt: Date.now() });
       toast.success("Renamed");
       await refresh();
     } catch (e) {
-      toast.error("Couldn't rename schema", { description: formatError(e) });
-    }
-  }
-
-  async function handleDuplicate(s: SchemaSummary) {
-    try {
-      const dup = await storage.duplicate(s.id);
-      if (dup) toast.success("Duplicated");
-      await refresh();
-    } catch (e) {
-      toast.error("Couldn't duplicate schema", { description: formatError(e) });
+      toast.error("Couldn't rename project", { description: formatError(e) });
     }
   }
 
   async function handleDelete() {
     if (!deleting) return;
     try {
-      await storage.delete(deleting.id);
+      await storage.deleteProject(deleting.id);
       toast.success("Deleted");
       await refresh();
     } catch (e) {
-      toast.error("Couldn't delete schema", { description: formatError(e) });
+      toast.error("Couldn't delete project", { description: formatError(e) });
     }
   }
 
-  const isEmpty = schemas !== null && schemas.length === 0;
+  const isEmpty = projects !== null && projects.length === 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <AppHeader>
         <span className="hidden text-sm text-muted-foreground sm:block">
-          Your schemas
+          Your projects
         </span>
       </AppHeader>
 
@@ -83,41 +95,38 @@ export function Dashboard() {
           <div className="flex items-end justify-between gap-6">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight">
-                Your schemas
+                Your projects
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                DBML in, beautiful diagrams out.{" "}
+                Group related schemas into projects.{" "}
                 {user
                   ? "Synced to your account."
-                  : "Edits are saved to this device."}
+                  : "Saved on this device."}
               </p>
             </div>
-            <NewSchemaDialog
-              trigger={
-                <Button className="gap-1.5">
-                  <Plus className="size-4" /> New schema
-                </Button>
-              }
-              onCreated={refresh}
-            />
+            <Button
+              className="gap-1.5"
+              onClick={() => setCreatingOpen(true)}
+            >
+              <FolderPlus className="size-4" /> New project
+            </Button>
           </div>
 
-          {schemas === null ? (
+          {projects === null ? (
             <SkeletonGrid />
           ) : isEmpty ? (
-            <EmptyState onCreated={refresh} />
+            <EmptyState onNew={() => setCreatingOpen(true)} />
           ) : (
             <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {schemas.map((s, i) => (
+              {projects.map((p, i) => (
                 <div
-                  key={s.id}
+                  key={p.id}
                   className="animate-fade-in-up"
                   style={{ animationDelay: `${i * 30}ms` }}
                 >
-                  <SchemaCard
-                    schema={s}
+                  <ProjectCard
+                    project={p}
                     onRename={(x) => setRenaming(x)}
-                    onDuplicate={(x) => handleDuplicate(x)}
                     onDelete={(x) => setDeleting(x)}
                   />
                 </div>
@@ -130,14 +139,34 @@ export function Dashboard() {
       </main>
 
       <RenameDialog
+        open={creatingOpen}
+        initialName=""
+        title="New project"
+        label="Project name"
+        submitLabel="Create"
+        fallback="Untitled project"
+        placeholder="e.g. Marketing"
+        onClose={() => setCreatingOpen(false)}
+        onConfirm={handleCreate}
+      />
+      <RenameDialog
         open={!!renaming}
         initialName={renaming?.name ?? ""}
+        title="Rename project"
+        label="Project name"
+        fallback="Untitled project"
         onClose={() => setRenaming(null)}
         onConfirm={handleRename}
       />
       <DeleteConfirmDialog
         open={!!deleting}
         schemaName={deleting?.name ?? ""}
+        title="Delete this project?"
+        trailing={
+          deleting && deleting.schemaCount > 0
+            ? `holds ${deleting.schemaCount} schema${deleting.schemaCount === 1 ? "" : "s"}. Move or delete them first.`
+            : "will be permanently removed. This action can't be undone."
+        }
         onClose={() => setDeleting(null)}
         onConfirm={handleDelete}
       />
@@ -159,7 +188,7 @@ function SkeletonGrid() {
   );
 }
 
-function EmptyState({ onCreated }: { onCreated: () => void }) {
+function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="mt-12 flex flex-col items-center rounded-xl border border-dashed border-border bg-surface/40 px-8 py-16 text-center">
       <div
@@ -169,21 +198,16 @@ function EmptyState({ onCreated }: { onCreated: () => void }) {
         <Sparkles className="size-6" />
       </div>
       <h2 className="mt-5 text-lg font-semibold tracking-tight">
-        Create your first schema
+        Create your first project
       </h2>
       <p className="mt-1.5 max-w-sm text-sm text-muted-foreground">
-        Start with the e-commerce sample to see the diagram light up, or begin
-        from a blank file.
+        A project is a folder of related schemas. Give it a name like
+        “Marketing” or “Analytics” to get started.
       </p>
       <div className="mt-5">
-        <NewSchemaDialog
-          onCreated={onCreated}
-          trigger={
-            <Button className="gap-1.5">
-              <Plus className="size-4" /> New schema
-            </Button>
-          }
-        />
+        <Button className="gap-1.5" onClick={onNew}>
+          <FolderPlus className="size-4" /> New project
+        </Button>
       </div>
     </div>
   );

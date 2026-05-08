@@ -12,6 +12,9 @@ import { Toaster } from "@/components/ui/sonner";
 const SchemaEditor = lazy(() =>
   import("@/routes/SchemaEditor").then((m) => ({ default: m.SchemaEditor })),
 );
+const ProjectView = lazy(() =>
+  import("@/routes/ProjectView").then((m) => ({ default: m.ProjectView })),
+);
 
 function EditorFallback() {
   return (
@@ -19,6 +22,17 @@ function EditorFallback() {
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span className="size-2 animate-pulse rounded-full bg-primary/70" />
         Loading editor…
+      </div>
+    </div>
+  );
+}
+
+function ProjectFallback() {
+  return (
+    <div className="grid h-full place-items-center">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <span className="size-2 animate-pulse rounded-full bg-primary/70" />
+        Loading project…
       </div>
     </div>
   );
@@ -32,6 +46,14 @@ export function App() {
           <TooltipProvider delayDuration={150}>
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route
+                path="/p/:projectId"
+                element={
+                  <Suspense fallback={<ProjectFallback />}>
+                    <ProjectView />
+                  </Suspense>
+                }
+              />
               <Route
                 path="/s/:id"
                 element={

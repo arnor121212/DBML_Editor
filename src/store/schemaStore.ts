@@ -45,6 +45,7 @@ interface SchemaState {
   // Identity
   schemaId: string | null;
   name: string;
+  projectId: string | null;
   createdAt: number;
   ownerId: string | null;
   myRole: MyRole;
@@ -207,6 +208,7 @@ function placeNewTables(
 export const useSchemaStore = create<SchemaState>((set, get) => ({
   schemaId: null,
   name: "Untitled schema",
+  projectId: null,
   createdAt: 0,
   ownerId: null,
   myRole: null,
@@ -245,6 +247,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     set({
       schemaId: rec.id,
       name: rec.name,
+      projectId: rec.projectId,
       createdAt: rec.createdAt,
       ownerId: rec.ownerId ?? null,
       myRole: rec.myRole ?? null,
@@ -270,6 +273,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     set({
       schemaId: null,
       name: "Untitled schema",
+      projectId: null,
       createdAt: 0,
       ownerId: null,
       myRole: null,
@@ -718,6 +722,18 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     // Viewers (incl. anonymous public-link viewers, plus signed-in viewers
     // receiving live edits from peers) should never write back. Skip silently.
     if (!s.canEdit) return;
+    // No projectId means the loaded record was malformed (pre-v2 IDB row, or
+    // a backend that didn't send project_id). Persisting now would fail the
+    // NOT NULL constraint server-side and possibly drop the column locally,
+    // so we bail — but loudly, since this state means edits aren't being
+    // saved and the user has no other signal.
+    if (!s.projectId) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[SchemaSync] persist skipped: schema has no projectId. Edits will not be saved.",
+      );
+      return;
+    }
     try {
       await getActiveBackend().put({
         id: s.schemaId,
@@ -726,6 +742,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
         positions: s.positions,
         widths: s.widths,
         edgeSides: s.edgeSides,
+        projectId: s.projectId,
         createdAt: s.createdAt || Date.now(),
         updatedAt: Date.now(),
       });

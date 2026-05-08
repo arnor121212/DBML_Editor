@@ -9,21 +9,32 @@
 import { useMemo } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { localBackend } from "./local";
-import { cloudBackend } from "./cloud";
-import type { StorageBackend } from "./types";
+import { localBackend, ensureDefaultProject as ensureDefaultLocalProject } from "./local";
+import { cloudBackend, ensureDefaultCloudProject } from "./cloud";
+import type { ProjectRecord, StorageBackend } from "./types";
 
 export type {
   SchemaRecord,
   SchemaSummary,
+  ProjectRecord,
+  ProjectSummary,
   StorageBackend,
   PublicRole,
   CollaboratorRole,
   MyRole,
 } from "./types";
 export { makeId } from "./types";
-export { localBackend, listLocalRecords, clearLocal } from "./local";
-export { cloudBackend, uploadLocalRecords } from "./cloud";
+export {
+  localBackend,
+  listLocalRecords,
+  clearLocal,
+  ensureDefaultProject as ensureDefaultLocalProject,
+} from "./local";
+export {
+  cloudBackend,
+  uploadLocalRecords,
+  ensureDefaultCloudProject,
+} from "./cloud";
 
 /**
  * Cloud-or-local lookup for a single schema. The primary backend (chosen by
@@ -67,6 +78,17 @@ if (supabase) {
 
 export function getActiveBackend(): StorageBackend {
   return activeBackend;
+}
+
+/**
+ * Get-or-create a "My schemas" default project on whichever backend is
+ * currently active. Used as the project assignment for first-time schemas
+ * created on a fresh account that has zero projects.
+ */
+export async function ensureDefaultProject(): Promise<ProjectRecord> {
+  return activeBackend === cloudBackend
+    ? ensureDefaultCloudProject()
+    : ensureDefaultLocalProject();
 }
 
 /**

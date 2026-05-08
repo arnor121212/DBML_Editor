@@ -41,6 +41,7 @@ export function HistoryDialog({ open, onClose }: Props) {
   const loadRecord = useSchemaStore((s) => s.loadRecord);
   const name = useSchemaStore((s) => s.name);
   const createdAt = useSchemaStore((s) => s.createdAt);
+  const projectId = useSchemaStore((s) => s.projectId);
 
   const [snapshots, setSnapshots] = useState<SnapshotSummary[] | null>(null);
   const [busy, setBusy] = useState<"none" | "save" | "restore" | "delete">("none");
@@ -97,11 +98,13 @@ export function HistoryDialog({ open, onClose }: Props) {
       const full = await getSnapshot(snap.id);
       if (!full) throw new Error("Snapshot not found");
       // Reuse loadRecord to refresh the editor with the snapshot's content.
+      if (!projectId) throw new Error("Project not loaded");
       loadRecord({
         id: schemaId,
         name,
         dbml: full.dbml,
         positions: full.positions,
+        projectId,
         createdAt,
         updatedAt: Date.now(),
       });

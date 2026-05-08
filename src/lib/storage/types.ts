@@ -27,6 +27,7 @@ export interface SchemaRecord {
    *  Value: which side of each table the edge attaches to. When absent the
    *  edge defaults to right→left (the original render direction). */
   edgeSides?: Record<string, { srcSide: "l" | "r"; tgtSide: "l" | "r" }>;
+  projectId: string;
   createdAt: number;
   updatedAt: number;
   // Cloud-only fields. Undefined for purely-local records.
@@ -38,9 +39,27 @@ export interface SchemaRecord {
 export interface SchemaSummary {
   id: string;
   name: string;
+  projectId: string;
   updatedAt: number;
   createdAt: number;
   tableCount: number;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  // Cloud-only.
+  ownerId?: string;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  schemaCount: number;
+  updatedAt: number;
+  createdAt: number;
 }
 
 /**
@@ -49,11 +68,24 @@ export interface SchemaSummary {
  * care which one is in use.
  */
 export interface StorageBackend {
-  list(): Promise<SchemaSummary[]>;
+  /** When `projectId` is given, only schemas in that project are returned. */
+  list(projectId?: string): Promise<SchemaSummary[]>;
   get(id: string): Promise<SchemaRecord | undefined>;
   put(rec: SchemaRecord): Promise<void>;
   delete(id: string): Promise<void>;
   duplicate(id: string): Promise<SchemaRecord | undefined>;
+  // Projects
+  listProjects(): Promise<ProjectSummary[]>;
+  getProject(id: string): Promise<ProjectRecord | undefined>;
+  putProject(rec: ProjectRecord): Promise<void>;
+  /** Throws if the project still has schemas. */
+  deleteProject(id: string): Promise<void>;
+  /**
+   * Move a schema to a different project. Owner-only at the cloud level —
+   * `put` deliberately doesn't pass `project_id` to avoid letting collaborator
+   * editors retarget another owner's schema.
+   */
+  moveSchema(schemaId: string, toProjectId: string): Promise<void>;
 }
 
 export function makeId(): string {
