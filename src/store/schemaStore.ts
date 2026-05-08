@@ -41,6 +41,14 @@ export interface ReviewState {
   hunks: ReviewHunk[];
 }
 
+/**
+ * Persistence lifecycle state. `idle` is the resting position between
+ * saves; `saving` is set while a `persist()` call is in flight; `saved`
+ * lingers briefly after success; `error` and `no-project` describe two
+ * distinct failure shapes so the UI can render different copy.
+ */
+export type SaveStatus = "idle" | "saving" | "saved" | "error" | "no-project";
+
 interface SchemaState {
   // Identity
   schemaId: string | null;
@@ -68,6 +76,9 @@ interface SchemaState {
   loaded: boolean;
   /** Updated on any content edit; used by the auto-snapshot timer. */
   lastEditAt: number;
+  // Persistence lifecycle (drives the StatusPill + toast dedup)
+  saveStatus: SaveStatus;
+  saveError: string | null;
   // AI inline review
   review: ReviewState | null;
 
@@ -226,6 +237,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   hoveredColumnKey: null,
   loaded: false,
   lastEditAt: 0,
+  saveStatus: "idle",
+  saveError: null,
   review: null,
 
   loadRecord(rec) {
@@ -265,6 +278,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       loaded: true,
       hoveredColumnKey: null,
       lastEditAt: 0,
+      saveStatus: "idle",
+      saveError: null,
       review: null,
     });
   },
@@ -291,6 +306,8 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       hoveredColumnKey: null,
       loaded: false,
       lastEditAt: 0,
+      saveStatus: "idle",
+      saveError: null,
       review: null,
     });
   },
@@ -723,17 +740,17 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     // receiving live edits from peers) should never write back. Skip silently.
     if (!s.canEdit) return;
     // No projectId means the loaded record was malformed (pre-v2 IDB row, or
-    // a backend that didn't send project_id). Persisting now would fail the
-    // NOT NULL constraint server-side and possibly drop the column locally,
-    // so we bail — but loudly, since this state means edits aren't being
-    // saved and the user has no other signal.
+    // a backend that didn't send project_id). Persisting would fail the
+    // NOT NULL constraint server-side. Surface this distinct from a transient
+    // backend error: the user needs to reload to recover, not retry.
     if (!s.projectId) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        "[SchemaSync] persist skipped: schema has no projectId. Edits will not be saved.",
-      );
+      set({
+        saveStatus: "no-project",
+        saveError: "Schema has no project. Reload to recover.",
+      });
       return;
     }
+    set({ saveStatus: "saving" });
     try {
       await getActiveBackend().put({
         id: s.schemaId,
@@ -746,12 +763,14 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
         createdAt: s.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
+      // Only flip to "saved" if no newer save started in the meantime —
+      // otherwise we'd briefly show "Saved" while another write is mid-flight.
+      if (get().saveStatus === "saving") {
+        set({ saveStatus: "saved", saveError: null });
+      }
     } catch (e) {
-      // Swallow per call — toast on every keystroke would be noisy. Log to
-      // console so cloud failures aren't completely silent. (IndexedDB also
-      // throws here in private-browsing mode; that's expected.)
-      // eslint-disable-next-line no-console
-      console.warn("[SchemaSync] persist failed:", e);
+      const message = e instanceof Error ? e.message : String(e);
+      set({ saveStatus: "error", saveError: message });
     }
   },
 }));

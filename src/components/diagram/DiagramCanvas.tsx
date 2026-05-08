@@ -28,6 +28,7 @@ import { useSchemaStore } from "@/store/schemaStore";
 import { pickHeaderColor } from "@/lib/dbml/palette";
 import { findTableLine } from "@/lib/dbml/findTableLine";
 import { hasEditor, revealLine } from "@/lib/editor/editorBus";
+import { registerFlow, unregisterFlow } from "@/lib/commands/diagramBus";
 import type { TableNodeData } from "@/lib/dbml/toFlow";
 import type { PresencePeer } from "@/lib/collab/usePresence";
 
@@ -57,8 +58,16 @@ function CanvasInner({ peers, onCursorMove, onRequestEditorOpen }: CanvasProps) 
   const setHovered = useSchemaStore((s) => s.setHoveredColumn);
   const schemaId = useSchemaStore((s) => s.schemaId);
   const canEdit = useSchemaStore((s) => s.canEdit);
-  const { fitView, screenToFlowPosition } = useReactFlow();
+  const reactFlow = useReactFlow();
+  const { fitView, screenToFlowPosition } = reactFlow;
   const isEmpty = nodes.length === 0;
+
+  // Make the React Flow instance available to commands fired from outside
+  // the canvas tree (e.g. the Cmd+K palette's "go to table" actions).
+  useEffect(() => {
+    registerFlow(reactFlow);
+    return () => unregisterFlow(reactFlow);
+  }, [reactFlow]);
 
   // Track local mouse over the canvas in flow coords. Attached to flowRef
   // (a sibling of React Flow's pane), not as an overlay, so React Flow's

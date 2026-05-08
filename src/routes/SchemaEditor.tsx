@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   PanelRightClose,
   Pencil,
   Share2,
+  Sparkles,
   Table as TableIcon,
 } from "lucide-react";
 import { AppHeader } from "@/components/layout/AppHeader";
@@ -20,6 +21,9 @@ import { SidePanel } from "@/components/layout/SidePanel";
 import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
 import { AiPanel } from "@/components/editor/AiPanel";
+import { StatusPill } from "@/components/editor/StatusPill";
+import { CommandPalette, usePaletteHotkey } from "@/components/palette/CommandPalette";
+import { register as registerCommand } from "@/lib/commands/registry";
 import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
 import { ShareDialog } from "@/components/sharing/ShareDialog";
 import { HistoryDialog } from "@/components/history/HistoryDialog";
@@ -68,11 +72,14 @@ export function SchemaEditor() {
   const [missing, setMissing] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [currentRecord, setCurrentRecord] = useState<SchemaRecord | null>(null);
   const [editorOpen, setEditorOpen] = useState(() =>
     readBool(STORAGE_EDITOR_OPEN, true),
   );
   const [aiOpen, setAiOpen] = useState(() => readBool(STORAGE_AI_OPEN, false));
+
+  usePaletteHotkey(setPaletteOpen);
 
   useAutoSnapshot();
   const session = useSchemaCollab();
@@ -88,21 +95,58 @@ export function SchemaEditor() {
         ? "Hide AI panel"
         : "Show AI panel";
 
-  function toggleEditor() {
+  const requestEditorOpen = useCallback(() => {
+    setEditorOpen((v) => {
+      if (v) return v;
+      window.localStorage.setItem(STORAGE_EDITOR_OPEN, "1");
+      return true;
+    });
+  }, []);
+
+  const toggleEditor = useCallback(() => {
     setEditorOpen((v) => {
       const next = !v;
       window.localStorage.setItem(STORAGE_EDITOR_OPEN, next ? "1" : "0");
       return next;
     });
-  }
-  function toggleAi() {
+  }, []);
+  const toggleAi = useCallback(() => {
     if (!aiAvailable) return;
     setAiOpen((v) => {
       const next = !v;
       window.localStorage.setItem(STORAGE_AI_OPEN, next ? "1" : "0");
       return next;
     });
-  }
+  }, [aiAvailable]);
+
+  // Expose the panel toggles to the command palette. Re-registers when
+  // their identities change (only when `aiAvailable` flips); the AI
+  // command is omitted entirely when AI isn't usable so users don't see
+  // a no-op item.
+  useEffect(() => {
+    return registerCommand(
+      {
+        id: "editor.togglePanel",
+        label: "Toggle editor panel",
+        icon: PanelLeft,
+        scope: "always",
+        group: "View",
+        handler: toggleEditor,
+      },
+      ...(aiAvailable
+        ? [
+            {
+              id: "ai.togglePanel",
+              label: "Toggle AI panel",
+              icon: Sparkles,
+              scope: "always",
+              group: "View",
+              handler: toggleAi,
+            } as const,
+          ]
+        : []),
+    );
+  }, [toggleEditor, toggleAi, aiAvailable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,12 +229,7 @@ export function SchemaEditor() {
           <DiagramCanvas
             peers={session ? peers : undefined}
             onCursorMove={session ? setCursor : undefined}
-            onRequestEditorOpen={() => {
-              if (!editorOpen) {
-                setEditorOpen(true);
-                window.localStorage.setItem(STORAGE_EDITOR_OPEN, "1");
-              }
-            }}
+            onRequestEditorOpen={requestEditorOpen}
           />
         )}
       </div>
@@ -242,6 +281,7 @@ export function SchemaEditor() {
               </span>
             )}
           </span>
+          {canEdit && <StatusPill />}
           <RoleBadge canEdit={canEdit} myRole={myRole} />
 
           <div className="ml-auto flex items-center gap-1">
@@ -312,6 +352,7 @@ export function SchemaEditor() {
         </AppHeader>
 
         {!canEdit && <ReadOnlyBanner myRole={myRole} />}
+        {canEdit && <NoProjectBanner />}
 
         <main className="min-h-0 flex-1">{main}</main>
 
@@ -326,6 +367,11 @@ export function SchemaEditor() {
         <HistoryDialog
           open={historyOpen}
           onClose={() => setHistoryOpen(false)}
+        />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onRequestEditorOpen={requestEditorOpen}
         />
       </div>
     </TooltipProvider>
@@ -360,6 +406,19 @@ function RoleBadge({
       {labels[myRole] ?? "Viewer"}
       {!canEdit && " · read-only"}
     </span>
+  );
+}
+
+function NoProjectBanner() {
+  const saveStatus = useSchemaStore((s) => s.saveStatus);
+  if (saveStatus !== "no-project") return null;
+  return (
+    <div className="flex shrink-0 items-center justify-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-1.5 text-[12px] text-warning">
+      <span>
+        Your edits aren&apos;t being saved — this schema is missing its
+        project link. Reload the page to recover.
+      </span>
+    </div>
   );
 }
 
