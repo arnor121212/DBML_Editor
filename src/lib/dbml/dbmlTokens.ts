@@ -12,6 +12,39 @@
 export const TABLE_RE =
   /^Table\s+("(?:[^"]*)"|\w+)(?:\.("(?:[^"]*)"|\w+))?/i;
 
+/** Matches the start of a `TableGroup` declaration line. */
+export const TABLE_GROUP_RE = /^TableGroup\b/i;
+
+/**
+ * Find every table reference on a line (ignoring any trailing `// comment`).
+ * Returns each match's resolved `schema.name` id plus the byte range to
+ * splice if removing it. Used by TableGroup body cleanup, where members are
+ * bare or `schema.name` identifiers separated by whitespace.
+ */
+export function findTableRefsOnLine(
+  line: string,
+): { id: string; start: number; end: number }[] {
+  const commentIdx = line.indexOf("//");
+  const code = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+  const re = /("[^"]+"|\w+)(?:\.("[^"]+"|\w+))?/g;
+  const out: { id: string; start: number; end: number }[] = [];
+  for (const m of code.matchAll(re)) {
+    const start = m.index!;
+    const end = start + m[0].length;
+    let schema: string;
+    let name: string;
+    if (m[2] !== undefined) {
+      schema = unquote(m[1]);
+      name = unquote(m[2]);
+    } else {
+      schema = "public";
+      name = unquote(m[1]);
+    }
+    out.push({ id: `${schema}.${name}`, start, end });
+  }
+  return out;
+}
+
 export function unquote(s: string): string {
   if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"')
     return s.slice(1, -1);

@@ -47,6 +47,7 @@ function RelationEdgeInner({
   target,
   sourceHandleId,
   targetHandleId,
+  selected,
 }: EdgeProps & { data?: RelationEdgeData }) {
   const hovered = useSchemaStore((s) => s.hoveredColumnKey);
 
@@ -79,6 +80,8 @@ function RelationEdgeInner({
 
   const isDimmed = !!hovered && !isHighlighted;
 
+  const isAccented = isHighlighted || selected;
+
   return (
     <>
       <BaseEdge
@@ -87,13 +90,15 @@ function RelationEdgeInner({
         markerStart={startMarker}
         markerEnd={endMarker}
         className={cn(
-          isHighlighted && "is-highlighted",
+          isAccented && "is-highlighted",
           isDimmed && "is-dimmed",
+          selected && "is-selected",
         )}
         style={{
-          color: isHighlighted
+          color: isAccented
             ? "var(--color-primary)"
             : "color-mix(in oklab, var(--color-muted-foreground) 70%, transparent)",
+          strokeWidth: selected ? 2.5 : undefined,
         }}
       />
       {isHighlighted && (

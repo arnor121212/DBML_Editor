@@ -8,10 +8,12 @@ import {
   ConnectionMode,
   ReactFlow,
   ReactFlowProvider,
+  applyEdgeChanges,
   applyNodeChanges,
   useReactFlow,
   type Connection,
   type Edge,
+  type EdgeChange,
   type EdgeTypes,
   type Node,
   type NodeChange,
@@ -29,7 +31,7 @@ import { pickHeaderColor } from "@/lib/dbml/palette";
 import { findTableLine } from "@/lib/dbml/findTableLine";
 import { hasEditor, revealLine } from "@/lib/editor/editorBus";
 import { registerFlow, unregisterFlow } from "@/lib/commands/diagramBus";
-import type { TableNodeData } from "@/lib/dbml/toFlow";
+import type { RelationEdgeData, TableNodeData } from "@/lib/dbml/toFlow";
 import type { PresencePeer } from "@/lib/collab/usePresence";
 
 const nodeTypes: NodeTypes = { table: TableNode };
@@ -49,6 +51,7 @@ function CanvasInner({ peers, onCursorMove, onRequestEditorOpen }: CanvasProps) 
   const nodes = useSchemaStore((s) => s.nodes);
   const edges = useSchemaStore((s) => s.edges);
   const setNodes = useSchemaStore((s) => s.setNodes);
+  const setEdges = useSchemaStore((s) => s.setEdges);
   const updatePosition = useSchemaStore((s) => s.updatePosition);
   const deleteTables = useSchemaStore((s) => s.deleteTables);
   const duplicateTables = useSchemaStore((s) => s.duplicateTables);
@@ -116,6 +119,13 @@ function CanvasInner({ peers, onCursorMove, onRequestEditorOpen }: CanvasProps) 
       }
     },
     [setNodes, updatePosition, deleteTables],
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge<RelationEdgeData>>[]) => {
+      setEdges((prev) => applyEdgeChanges(changes, prev));
+    },
+    [setEdges],
   );
 
   const onNodeMouseLeave: NodeMouseHandler = useCallback(() => {
@@ -284,6 +294,7 @@ function CanvasInner({ peers, onCursorMove, onRequestEditorOpen }: CanvasProps) 
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeMouseLeave={onNodeMouseLeave}
         onConnect={onConnect}

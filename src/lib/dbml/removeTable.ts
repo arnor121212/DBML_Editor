@@ -9,8 +9,10 @@
  */
 
 import {
+  TABLE_GROUP_RE,
   TABLE_RE,
   endpointTableId,
+  findTableRefsOnLine,
   stripInlineRefsToAny,
   unquote,
 } from "./dbmlTokens";
@@ -123,6 +125,89 @@ export function removeTables(dbml: string, tableIds: Set<string>): string {
         }
       }
       i++;
+      continue;
+    }
+
+    // ── TableGroup block ─────────────────────────────────────────
+    // Per the @dbml/core grammar, the body is just whitespace-separated
+    // (optionally schema-qualified) table refs. No Notes, no settings.
+    if (TABLE_GROUP_RE.test(trimmed)) {
+      // One-liner: `TableGroup foo { a b c }` on a single line.
+      const oneLineOpen = lines[i].indexOf("{");
+      const oneLineClose = lines[i].indexOf("}", oneLineOpen + 1);
+      if (oneLineOpen >= 0 && oneLineClose > oneLineOpen) {
+        const inner = lines[i].slice(oneLineOpen + 1, oneLineClose);
+        const refs = findTableRefsOnLine(inner);
+        const kept = refs.filter((r) => !tableIds.has(r.id));
+        if (refs.length > 0 && kept.length === 0) {
+          keep[i] = false;
+        } else {
+          const deleted = refs.filter((r) => tableIds.has(r.id));
+          if (deleted.length > 0) {
+            let newInner = inner;
+            for (const d of [...deleted].sort((a, b) => b.start - a.start)) {
+              newInner = newInner.slice(0, d.start) + newInner.slice(d.end);
+            }
+            lines[i] =
+              lines[i].slice(0, oneLineOpen + 1) +
+              newInner +
+              lines[i].slice(oneLineClose);
+          }
+        }
+        i++;
+        continue;
+      }
+
+      // Multi-line: locate `{`, walk body until matching `}`.
+      const blockStart = i;
+      let openIdx = trimmed.includes("{") ? i : -1;
+      if (openIdx === -1) {
+        let j = i + 1;
+        while (j < lines.length && !lines[j].includes("{")) j++;
+        if (j >= lines.length) {
+          i++;
+          continue;
+        }
+        openIdx = j;
+      }
+      let depth = braceBalance(lines[openIdx]);
+      const bodyLines: number[] = [];
+      let k = openIdx + 1;
+      while (k < lines.length && depth > 0) {
+        bodyLines.push(k);
+        depth += braceBalance(lines[k]);
+        k++;
+      }
+      const blockEnd = k; // exclusive
+
+      let totalRefs = 0;
+      let keptRefs = 0;
+      for (const li of bodyLines) {
+        const refs = findTableRefsOnLine(lines[li]);
+        if (refs.length === 0) continue;
+        totalRefs += refs.length;
+        const deleted = refs.filter((r) => tableIds.has(r.id));
+        const kept = refs.filter((r) => !tableIds.has(r.id));
+        keptRefs += kept.length;
+        if (deleted.length === 0) continue;
+        if (kept.length === 0) {
+          keep[li] = false;
+        } else {
+          let newContent = lines[li];
+          for (const d of [...deleted].sort((a, b) => b.start - a.start)) {
+            newContent =
+              newContent.slice(0, d.start) + newContent.slice(d.end);
+          }
+          lines[li] = newContent;
+        }
+      }
+
+      // If the group had members and all of them are gone, drop the block.
+      if (totalRefs > 0 && keptRefs === 0) {
+        for (let z = blockStart; z < blockEnd; z++) keep[z] = false;
+      }
+
+      i = blockEnd;
       continue;
     }
 
