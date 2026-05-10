@@ -1,69 +1,72 @@
-import { CheckCircle2, Loader2, AlertTriangle, RotateCw } from "lucide-react";
+import {
+  CheckCircle2,
+  Loader2,
+  AlertTriangle,
+  RotateCw,
+  type LucideIcon,
+} from "lucide-react";
 import { useSyncStatus } from "@/lib/sync/useSyncStatus";
 import { cn } from "@/lib/utils";
 
+type RenderableStatus = Exclude<ReturnType<typeof useSyncStatus>["phase"], "idle">;
+
+const PILL_BASE =
+  "inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px]";
+
+const STATUS: Record<
+  RenderableStatus,
+  { icon: LucideIcon; iconClass?: string; label: string; classes: string }
+> = {
+  saving: {
+    icon: Loader2,
+    iconClass: "animate-spin",
+    label: "Saving…",
+    classes: "border-border bg-surface-2 text-muted-foreground",
+  },
+  saved: {
+    icon: CheckCircle2,
+    label: "Saved",
+    classes: "border-border bg-surface-2 text-success",
+  },
+  "no-project": {
+    icon: AlertTriangle,
+    label: "Edits not saving",
+    classes: "border-warning/40 bg-warning/10 text-warning",
+  },
+  error: {
+    icon: RotateCw,
+    label: "Save failed",
+    classes:
+      "border-destructive/40 bg-destructive/10 text-destructive transition-colors hover:bg-destructive/15",
+  },
+};
+
 export function StatusPill() {
   const { phase, error, retry } = useSyncStatus();
-
   if (phase === "idle") return null;
 
-  if (phase === "saving") {
-    return (
-      <span className={base("text-muted-foreground")}>
-        <Loader2 className="size-3 animate-spin" />
-        Saving…
-      </span>
-    );
-  }
+  const config = STATUS[phase];
+  const Icon = config.icon;
+  const className = cn(PILL_BASE, config.classes);
 
-  if (phase === "saved") {
+  if (phase === "error") {
     return (
-      <span className={base("text-success")}>
-        <CheckCircle2 className="size-3" />
-        Saved
-      </span>
-    );
-  }
-
-  if (phase === "no-project") {
-    return (
-      <span
-        className={base("border-warning/40 bg-warning/10 text-warning")}
-        title={error ?? undefined}
+      <button
+        type="button"
+        onClick={retry}
+        className={className}
+        title={error ?? "Retry"}
       >
-        <AlertTriangle className="size-3" />
-        Edits not saving
-      </span>
+        <Icon className={cn("size-3", config.iconClass)} />
+        {config.label}
+      </button>
     );
   }
 
-  // phase === "error"
   return (
-    <button
-      type="button"
-      onClick={retry}
-      className={cn(
-        baseClasses("border-destructive/40 bg-destructive/10 text-destructive"),
-        "transition-colors hover:bg-destructive/15",
-      )}
-      title={error ?? "Retry"}
-    >
-      <RotateCw className="size-3" />
-      Save failed
-    </button>
-  );
-}
-
-function baseClasses(extra: string) {
-  return cn(
-    "inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px]",
-    extra,
-  );
-}
-
-function base(extra: string) {
-  return cn(
-    "inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-1.5 py-1 text-[11px]",
-    extra,
+    <span className={className} title={phase === "no-project" ? error ?? undefined : undefined}>
+      <Icon className={cn("size-3", config.iconClass)} />
+      {config.label}
+    </span>
   );
 }

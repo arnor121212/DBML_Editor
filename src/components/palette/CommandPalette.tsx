@@ -1,15 +1,3 @@
-/**
- * Cmd+K palette. Two sections:
- *  - Tables: derived from the schema store; selecting one centers the
- *    diagram on that node (via diagramBus) and reveals its declaration
- *    line in Monaco (via editorBus). If the editor side-panel is closed
- *    the caller passes `onRequestEditorOpen` to open it before reveal.
- *  - Actions: anything registered with `commands/registry`. Grouped by
- *    `command.group`.
- *
- * Keyboard handling lives in `usePaletteHotkey` so the binding can be
- * reused later (e.g. to open the palette from a button).
- */
 import { useEffect, useMemo } from "react";
 import { Table as TableIcon } from "lucide-react";
 import {
@@ -39,12 +27,10 @@ interface Props {
 
 export function CommandPalette({ open, onOpenChange, onRequestEditorOpen }: Props) {
   const tables = useSchemaStore((s) => s.schema.tables);
-  const dbml = useSchemaStore((s) => s.dbml);
   const schemaId = useSchemaStore((s) => s.schemaId);
   const canEdit = useSchemaStore((s) => s.canEdit);
   const commands = useCommands({ hasSchema: !!schemaId, canEdit });
 
-  // Bucket actions by their `group` for the palette's section headings.
   const groupedActions = useMemo(() => {
     const groups = new Map<string, Command[]>();
     for (const c of commands) {
@@ -58,7 +44,7 @@ export function CommandPalette({ open, onOpenChange, onRequestEditorOpen }: Prop
 
   function jumpToTable(tableId: string) {
     centerOnNode(tableId);
-    const line = findTableLine(dbml, tableId);
+    const line = findTableLine(useSchemaStore.getState().dbml, tableId);
     if (line !== null) {
       if (!hasEditor() && onRequestEditorOpen) onRequestEditorOpen();
       revealLine(line);
@@ -124,14 +110,6 @@ export function CommandPalette({ open, onOpenChange, onRequestEditorOpen }: Prop
   );
 }
 
-/**
- * Document-level Ctrl/Cmd+K listener that toggles the palette. Skips when
- * focus is inside Monaco or any text input so the editor's own command
- * palette still works. Mirrors the form-control guard in DiagramCanvas.
- *
- * The toggle uses the dispatch-with-updater form so the listener doesn't
- * need to re-bind when `open` changes — keeps the effect deps empty.
- */
 export function usePaletteHotkey(
   setOpen: React.Dispatch<React.SetStateAction<boolean>>,
 ): void {
@@ -147,9 +125,8 @@ export function usePaletteHotkey(
     function onKey(e: KeyboardEvent) {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (e.key !== "k" && e.key !== "K") return;
-      // The palette's own input is inside the dialog (which lifts above the
-      // document) — let cmdk handle Ctrl+K-while-typing if it ever needs to.
-      // Outside the dialog, guard against Monaco / regular inputs.
+      // Skip when typing in Monaco / regular inputs — the dialog's own input
+      // lives inside cmdk and isn't on the document.
       if (isFormControl(document.activeElement)) return;
       e.preventDefault();
       setOpen((v) => !v);

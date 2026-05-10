@@ -87,13 +87,7 @@ export function SchemaEditor() {
 
   const { user, configured, isLoading: authLoading } = useAuth();
   const aiAvailable = configured && !authLoading && !!user;
-  const aiTooltip = !configured
-    ? "AI generation requires Supabase configuration."
-    : !user
-      ? "Sign in to use AI generation."
-      : aiOpen
-        ? "Hide AI panel"
-        : "Show AI panel";
+  const aiTooltip = aiTooltipFor({ configured, user: !!user, aiOpen });
 
   const requestEditorOpen = useCallback(() => {
     setEditorOpen((v) => {
@@ -119,10 +113,6 @@ export function SchemaEditor() {
     });
   }, [aiAvailable]);
 
-  // Expose the panel toggles to the command palette. Re-registers when
-  // their identities change (only when `aiAvailable` flips); the AI
-  // command is omitted entirely when AI isn't usable so users don't see
-  // a no-op item.
   useEffect(() => {
     return registerCommand(
       {
@@ -494,4 +484,18 @@ function NameEditor({
       <Pencil className="size-3 opacity-0 transition-opacity group-hover/name:opacity-60" />
     </button>
   );
+}
+
+function aiTooltipFor({
+  configured,
+  user,
+  aiOpen,
+}: {
+  configured: boolean;
+  user: boolean;
+  aiOpen: boolean;
+}): string {
+  if (!configured) return "AI generation requires Supabase configuration.";
+  if (!user) return "Sign in to use AI generation.";
+  return aiOpen ? "Hide AI panel" : "Show AI panel";
 }

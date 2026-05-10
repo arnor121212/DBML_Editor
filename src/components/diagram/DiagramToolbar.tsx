@@ -39,11 +39,6 @@ interface Props {
 export function DiagramToolbar({ flowRef }: Props) {
   const { fitView } = useReactFlow();
 
-  // Register the four palette-shareable diagram actions. Buttons in this
-  // component call `run(id)` instead of local closures so the command
-  // palette and the toolbar always stay in sync. Reading `name`/`nodes`
-  // from the store inside the handler (via getState) keeps deps stable so
-  // the effect runs once per mount.
   useEffect(() => {
     return register(
       {
@@ -118,8 +113,6 @@ export function DiagramToolbar({ flowRef }: Props) {
     );
   }, [fitView, flowRef]);
 
-  // SQL exports stay local — they're nested in a dropdown with three
-  // dialect choices, which doesn't map cleanly onto a flat command list.
   const handleSql = (dialect: SqlDialect) => {
     const { dbml, name } = useSchemaStore.getState();
     try {

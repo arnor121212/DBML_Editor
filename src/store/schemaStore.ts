@@ -41,12 +41,6 @@ export interface ReviewState {
   hunks: ReviewHunk[];
 }
 
-/**
- * Persistence lifecycle state. `idle` is the resting position between
- * saves; `saving` is set while a `persist()` call is in flight; `saved`
- * lingers briefly after success; `error` and `no-project` describe two
- * distinct failure shapes so the UI can render different copy.
- */
 export type SaveStatus = "idle" | "saving" | "saved" | "error" | "no-project";
 
 interface SchemaState {
@@ -76,7 +70,6 @@ interface SchemaState {
   loaded: boolean;
   /** Updated on any content edit; used by the auto-snapshot timer. */
   lastEditAt: number;
-  // Persistence lifecycle (drives the StatusPill + toast dedup)
   saveStatus: SaveStatus;
   saveError: string | null;
   // AI inline review
@@ -142,6 +135,9 @@ interface SchemaState {
 }
 
 const EMPTY_SCHEMA: SchemaModel = { tables: [], refs: [], enums: [] };
+
+const SAVED_LINGER_MS = 1500;
+let savedResetHandle: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Parse DBML, build flow nodes/edges, and return a partial state suitable
@@ -736,19 +732,17 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   async persist() {
     const s = get();
     if (!s.schemaId) return;
-    // Viewers (incl. anonymous public-link viewers, plus signed-in viewers
-    // receiving live edits from peers) should never write back. Skip silently.
     if (!s.canEdit) return;
-    // No projectId means the loaded record was malformed (pre-v2 IDB row, or
-    // a backend that didn't send project_id). Persisting would fail the
-    // NOT NULL constraint server-side. Surface this distinct from a transient
-    // backend error: the user needs to reload to recover, not retry.
     if (!s.projectId) {
       set({
         saveStatus: "no-project",
         saveError: "Schema has no project. Reload to recover.",
       });
       return;
+    }
+    if (savedResetHandle !== null) {
+      clearTimeout(savedResetHandle);
+      savedResetHandle = null;
     }
     set({ saveStatus: "saving" });
     try {
@@ -763,10 +757,15 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
         createdAt: s.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
-      // Only flip to "saved" if no newer save started in the meantime —
-      // otherwise we'd briefly show "Saved" while another write is mid-flight.
+      // Only flip to "saved" if no newer save started in the meantime.
       if (get().saveStatus === "saving") {
         set({ saveStatus: "saved", saveError: null });
+        savedResetHandle = setTimeout(() => {
+          savedResetHandle = null;
+          if (useSchemaStore.getState().saveStatus === "saved") {
+            useSchemaStore.setState({ saveStatus: "idle" });
+          }
+        }, SAVED_LINGER_MS);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

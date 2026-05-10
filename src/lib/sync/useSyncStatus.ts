@@ -1,13 +1,3 @@
-/**
- * Bridge between the schema store's persistence lifecycle and the UI:
- * - exposes the current `SaveStatus` to render the StatusPill
- * - fires deduped toasts on transitions into `error`
- * - exposes a `retry()` that re-runs `persist()` so the pill button works
- *
- * Lives outside the store so the store stays free of React/sonner coupling
- * and so future signals (e.g. collab disconnect) can be folded into the
- * same pill without touching the store.
- */
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useSchemaStore, type SaveStatus } from "@/store/schemaStore";
@@ -24,11 +14,8 @@ export function useSyncStatus(): SyncStatus {
   const phase = useSchemaStore((s) => s.saveStatus);
   const error = useSchemaStore((s) => s.saveError);
   const persist = useSchemaStore((s) => s.persist);
-
-  // Track the last error message we already toasted so back-to-back failures
-  // (every 180ms debounce tick during an outage) collapse to one toast.
-  // Sonner's `id` would also dedup, but tracking it ourselves lets us
-  // re-toast when the message actually changes (different failure mode).
+  // Track the last error message we already toasted so a long outage produces
+  // one toast (and updates it only when the message actually changes).
   const lastToastedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -43,15 +30,10 @@ export function useSyncStatus(): SyncStatus {
       }
       return;
     }
-    if (phase === "saved" || phase === "saving" || phase === "idle") {
-      // A successful (or in-flight) save clears the dedup so the *next*
-      // outage can toast again.
-      if (lastToastedRef.current !== null) {
-        lastToastedRef.current = null;
-        toast.dismiss(TOAST_ID);
-      }
+    if (phase === "saved" && lastToastedRef.current !== null) {
+      lastToastedRef.current = null;
+      toast.dismiss(TOAST_ID);
     }
-    // `no-project` is rendered as an inline banner — no toast.
   }, [phase, error, persist]);
 
   return { phase, error, retry: () => void persist() };
