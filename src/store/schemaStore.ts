@@ -15,6 +15,7 @@ import {
 import { autoLayout } from "@/lib/dbml/layout";
 import { removeTables } from "@/lib/dbml/removeTable";
 import { renameTable as renameTableText } from "@/lib/dbml/renameTable";
+import { editColumn as editColumnText } from "@/lib/dbml/editColumn";
 import { duplicateTableBlocks, nextAvailableName } from "@/lib/dbml/copyTable";
 import { appendRef } from "@/lib/dbml/addRef";
 import { removeRef } from "@/lib/dbml/removeRef";
@@ -87,6 +88,14 @@ interface SchemaState {
   renameTable: (tableId: string, newName: string) => boolean;
   /** Per-table width override (visual only — doesn't bump lastEditAt). */
   setWidth: (tableId: string, width: number) => void;
+  /** Edit a column's name and/or type inline. When the name changes, every
+   *  endpoint reference to the old column is rewritten too. Returns true on
+   *  success, false on a name conflict / invalid name / column not found. */
+  editColumn: (
+    tableId: string,
+    oldColumn: string,
+    edit: { name?: string; type?: string },
+  ) => boolean;
   /** Duplicate one or more tables. Pasted nodes land offset from the
    *  originals; new ids are returned so the caller can update selection. */
   duplicateTables: (tableIds: string[]) => string[];
@@ -419,6 +428,45 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     );
     set({ widths, nodes });
     void get().persist();
+  },
+
+  editColumn(tableId, oldColumn, edit) {
+    const prev = get();
+    if (!prev.canEdit) return false;
+    const newName = edit.name?.trim();
+    const newType = edit.type?.trim();
+    if (newName !== undefined && newName === "") return false;
+    if (newType !== undefined && newType === "") return false;
+
+    const target = prev.schema.tables.find((t) => t.id === tableId);
+    if (!target) return false;
+    if (newName !== undefined && newName !== oldColumn) {
+      if (target.columns.some((c) => c.name === newName)) return false;
+    }
+    const change: { name?: string; type?: string } = {};
+    if (newName !== undefined && newName !== oldColumn) change.name = newName;
+    if (newType !== undefined) {
+      const existing = target.columns.find((c) => c.name === oldColumn);
+      if (!existing || existing.type !== newType) change.type = newType;
+    }
+    if (change.name === undefined && change.type === undefined) return false;
+
+    const newDbml = editColumnText(prev.dbml, tableId, oldColumn, change);
+    if (newDbml === prev.dbml) return false;
+
+    const partial = buildParsedStatePartial(
+      newDbml,
+      prev.positions,
+      prev.widths,
+      prev.edgeSides,
+    );
+    if (editorReplaceText(newDbml)) {
+      set({ ...partial, lastEditAt: Date.now() });
+      return true;
+    }
+    set({ ...partial, lastEditAt: Date.now() });
+    void get().persist();
+    return true;
   },
 
   duplicateTables(tableIds) {

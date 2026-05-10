@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock,
   Code2,
+  Download,
   Eye,
   Globe,
   PanelLeft,
@@ -22,6 +23,7 @@ import { DBMLEditor } from "@/components/editor/DBMLEditor";
 import { ErrorBar } from "@/components/editor/ErrorBar";
 import { AiPanel } from "@/components/editor/AiPanel";
 import { StatusPill } from "@/components/editor/StatusPill";
+import { ImportSqlDialog } from "@/components/editor/ImportSqlDialog";
 import { CommandPalette, usePaletteHotkey } from "@/components/palette/CommandPalette";
 import { register as registerCommand } from "@/lib/commands/registry";
 import { DiagramCanvas } from "@/components/diagram/DiagramCanvas";
@@ -73,6 +75,7 @@ export function SchemaEditor() {
   const [shareOpen, setShareOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [importSqlOpen, setImportSqlOpen] = useState(false);
   const [currentRecord, setCurrentRecord] = useState<SchemaRecord | null>(null);
   const [editorOpen, setEditorOpen] = useState(() =>
     readBool(STORAGE_EDITOR_OPEN, true),
@@ -113,6 +116,8 @@ export function SchemaEditor() {
     });
   }, [aiAvailable]);
 
+  const openImportSql = useCallback(() => setImportSqlOpen(true), []);
+
   useEffect(() => {
     return registerCommand(
       {
@@ -122,6 +127,14 @@ export function SchemaEditor() {
         scope: "always",
         group: "View",
         handler: toggleEditor,
+      },
+      {
+        id: "schema.importSql",
+        label: "Import SQL DDL…",
+        icon: Download,
+        scope: "canEdit",
+        group: "Schema",
+        handler: openImportSql,
       },
       ...(aiAvailable
         ? [
@@ -136,7 +149,7 @@ export function SchemaEditor() {
           ]
         : []),
     );
-  }, [toggleEditor, toggleAi, aiAvailable]);
+  }, [toggleEditor, toggleAi, openImportSql, aiAvailable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -362,6 +375,10 @@ export function SchemaEditor() {
           open={paletteOpen}
           onOpenChange={setPaletteOpen}
           onRequestEditorOpen={requestEditorOpen}
+        />
+        <ImportSqlDialog
+          open={importSqlOpen}
+          onOpenChange={setImportSqlOpen}
         />
       </div>
     </TooltipProvider>

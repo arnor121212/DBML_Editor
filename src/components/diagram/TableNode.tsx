@@ -79,12 +79,15 @@ function TableNodeInner({ id, data, selected }: TableNodeProps) {
   const hoveredKey = useSchemaStore((s) => s.hoveredColumnKey);
   const edges = useSchemaStore((s) => s.edges);
   const renameTable = useSchemaStore((s) => s.renameTable);
+  const editColumn = useSchemaStore((s) => s.editColumn);
   const setWidth = useSchemaStore((s) => s.setWidth);
   const canEdit = useSchemaStore((s) => s.canEdit);
 
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(data.name);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [editingCol, setEditingCol] =
+    useState<{ name: string; field: "name" | "type" } | null>(null);
 
   // Reset draft if the underlying name changes (e.g. external edit).
   useEffect(() => {
@@ -243,6 +246,7 @@ function TableNodeInner({ id, data, selected }: TableNodeProps) {
         {data.columns.map((col) => {
           const rowKey = `${data.id}::${col.name}`;
           const isHovered = hoveredKey === rowKey;
+          const editing = editingCol?.name === col.name ? editingCol : null;
           return (
             <div
               key={col.name}
@@ -299,28 +303,87 @@ function TableNodeInner({ id, data, selected }: TableNodeProps) {
               </span>
 
               {/* Name */}
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate font-mono",
-                  col.pk && "font-semibold",
-                )}
-                title={col.name}
-              >
-                {col.name}
-              </span>
+              {editing?.field === "name" ? (
+                <ColumnEditInput
+                  initial={col.name}
+                  className={cn(
+                    "min-w-0 flex-1 rounded-sm border border-primary/40 bg-background/80 px-1 font-mono",
+                    col.pk && "font-semibold",
+                  )}
+                  placeholder="column name"
+                  onCommit={(value) => {
+                    setEditingCol(null);
+                    const next = value.trim();
+                    if (!next || next === col.name) return;
+                    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(next)) {
+                      toast.error("Invalid column name", {
+                        description:
+                          "Use letters, digits, and underscores. Must start with a letter or underscore.",
+                      });
+                      return;
+                    }
+                    const ok = editColumn(id, col.name, { name: next });
+                    if (!ok) {
+                      toast.error("Couldn't rename column", {
+                        description: `A column named "${next}" already exists in this table.`,
+                      });
+                    }
+                  }}
+                  onCancel={() => setEditingCol(null)}
+                />
+              ) : (
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate font-mono",
+                    col.pk && "font-semibold",
+                    canEdit && "cursor-text",
+                  )}
+                  title={canEdit ? "Double-click to rename column" : col.name}
+                  onDoubleClick={(e) => {
+                    if (!canEdit) return;
+                    e.stopPropagation();
+                    setEditingCol({ name: col.name, field: "name" });
+                  }}
+                >
+                  {col.name}
+                </span>
+              )}
 
               {/* Type pill */}
-              <span
-                className="shrink-0 rounded-md border px-1.5 py-px font-mono text-[10.5px] font-medium leading-tight"
-                style={{
-                  color: typeColorVar(col.type),
-                  borderColor: `color-mix(in oklab, ${typeColorVar(col.type)} 25%, var(--color-border))`,
-                  background: `color-mix(in oklab, ${typeColorVar(col.type)} 10%, transparent)`,
-                }}
-                title={col.type}
-              >
-                {col.type}
-              </span>
+              {editing?.field === "type" ? (
+                <ColumnEditInput
+                  initial={col.type}
+                  className="w-24 shrink-0 rounded-sm border border-primary/40 bg-background/80 px-1 font-mono text-[10.5px]"
+                  placeholder="type"
+                  onCommit={(value) => {
+                    setEditingCol(null);
+                    const next = value.trim();
+                    if (!next || next === col.type) return;
+                    editColumn(id, col.name, { type: next });
+                  }}
+                  onCancel={() => setEditingCol(null)}
+                />
+              ) : (
+                <span
+                  className={cn(
+                    "shrink-0 rounded-md border px-1.5 py-px font-mono text-[10.5px] font-medium leading-tight",
+                    canEdit && "cursor-text",
+                  )}
+                  style={{
+                    color: typeColorVar(col.type),
+                    borderColor: `color-mix(in oklab, ${typeColorVar(col.type)} 25%, var(--color-border))`,
+                    background: `color-mix(in oklab, ${typeColorVar(col.type)} 10%, transparent)`,
+                  }}
+                  title={canEdit ? "Double-click to change type" : col.type}
+                  onDoubleClick={(e) => {
+                    if (!canEdit) return;
+                    e.stopPropagation();
+                    setEditingCol({ name: col.name, field: "type" });
+                  }}
+                >
+                  {col.type}
+                </span>
+              )}
 
               {/* Flags */}
               {col.notNull && (
@@ -346,6 +409,50 @@ function TableNodeInner({ id, data, selected }: TableNodeProps) {
         )}
       </div>
     </div>
+  );
+}
+
+function ColumnEditInput({
+  initial,
+  className,
+  placeholder,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  className?: string;
+  placeholder?: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    ref.current?.select();
+  }, []);
+  return (
+    <input
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => onCommit(value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onCommit(value);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+        // Stop propagation so React Flow doesn't consume Backspace/Delete
+        // as a node-delete while the user is mid-edit.
+        e.stopPropagation();
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      placeholder={placeholder}
+      className={cn("outline-none focus:border-primary", className)}
+    />
   );
 }
 

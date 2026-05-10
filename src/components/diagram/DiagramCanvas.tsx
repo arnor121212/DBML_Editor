@@ -25,6 +25,7 @@ import { RelationEdge } from "./RelationEdge";
 import { DiagramToolbar } from "./DiagramToolbar";
 import { EmptyDiagram } from "./EmptyDiagram";
 import { EdgeMarkers } from "./EdgeMarkers";
+import { LintPanel } from "./LintPanel";
 import { RemoteCursors } from "@/components/collab/RemoteCursors";
 import { useSchemaStore } from "@/store/schemaStore";
 import { pickHeaderColor } from "@/lib/dbml/palette";
@@ -336,6 +337,9 @@ function CanvasInner({ peers, onCursorMove, onRequestEditorOpen }: CanvasProps) 
           nodeStrokeWidth={2}
           maskColor="color-mix(in oklab, var(--color-background) 80%, transparent)"
         />
+        <Panel position="top-left">
+          <LintPanel onRequestEditorOpen={onRequestEditorOpen} />
+        </Panel>
         <Panel position="top-right">
           <DiagramToolbar flowRef={flowRef} />
         </Panel>
