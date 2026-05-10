@@ -20,9 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSchemaStore } from "@/store/schemaStore";
+import { parseDbml } from "@/lib/dbml/parse";
 import { formatError } from "@/lib/utils";
 
 type Dialect = "postgres" | "mysql" | "mssql";
+type Mode = "append" | "replace";
 
 const DIALECTS: { value: Dialect; label: string }[] = [
   { value: "postgres", label: "PostgreSQL" },
@@ -39,14 +41,20 @@ export function ImportSqlDialog({
 }) {
   const [sql, setSql] = useState("");
   const [dialect, setDialect] = useState<Dialect>("postgres");
+  const [mode, setMode] = useState<Mode>("append");
   const [busy, setBusy] = useState(false);
   const setDbml = useSchemaStore((s) => s.setDbml);
-  const currentDbml = useSchemaStore((s) => s.dbml);
 
   function reset() {
     setSql("");
     setDialect("postgres");
+    setMode("append");
     setBusy(false);
+  }
+
+  function close() {
+    onOpenChange(false);
+    reset();
   }
 
   function handleImport() {
@@ -54,23 +62,46 @@ export function ImportSqlDialog({
     if (!text) return;
     setBusy(true);
     try {
-      const dbml = importer.import(text, dialect);
-      const replacing = currentDbml.trim().length > 0;
-      if (replacing) {
-        const ok = window.confirm(
-          "Importing will replace the current schema. Continue?",
-        );
-        if (!ok) {
-          setBusy(false);
-          return;
+      const importedDbml = importer.import(text, dialect);
+
+      if (mode === "replace") {
+        const current = useSchemaStore.getState().dbml.trim();
+        if (current.length > 0) {
+          const ok = window.confirm(
+            "Replacing will discard the current schema. Continue?",
+          );
+          if (!ok) {
+            setBusy(false);
+            return;
+          }
         }
+        setDbml(importedDbml);
+        toast.success("Imported SQL", {
+          description: `Replaced schema with ${tableCountLabel(importedDbml)}.`,
+        });
+        close();
+        return;
       }
-      setDbml(dbml);
-      toast.success("Imported SQL", {
-        description: `Converted ${DIALECTS.find((d) => d.value === dialect)?.label} DDL to DBML.`,
+
+      // Append mode: detect table-name collisions before merging.
+      const current = useSchemaStore.getState().dbml;
+      const conflicts = findTableConflicts(current, importedDbml);
+      if (conflicts.length > 0) {
+        toast.error("Couldn't add tables", {
+          description: `Already in this schema: ${conflicts.join(", ")}. Rename them in the SQL first or pick "Replace".`,
+        });
+        setBusy(false);
+        return;
+      }
+
+      const merged = current.trimEnd().length === 0
+        ? importedDbml
+        : `${current.trimEnd()}\n\n${importedDbml}`;
+      setDbml(merged);
+      toast.success("Added to schema", {
+        description: `Imported ${tableCountLabel(importedDbml)}.`,
       });
-      onOpenChange(false);
-      reset();
+      close();
     } catch (e) {
       toast.error("Couldn't import SQL", { description: formatError(e) });
     } finally {
@@ -82,8 +113,8 @@ export function ImportSqlDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        onOpenChange(next);
-        if (!next) reset();
+        if (!next) close();
+        else onOpenChange(next);
       }}
     >
       <DialogContent className="max-w-2xl">
@@ -93,24 +124,38 @@ export function ImportSqlDialog({
           </DialogTitle>
           <DialogDescription>
             Paste a SQL schema dump (CREATE TABLE statements) and pick its
-            dialect. The result replaces the current DBML.
+            dialect.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 py-2">
-          <div className="grid gap-2">
-            <Label htmlFor="sql-dialect">Dialect</Label>
-            <Select value={dialect} onValueChange={(v) => setDialect(v as Dialect)}>
-              <SelectTrigger id="sql-dialect" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DIALECTS.map((d) => (
-                  <SelectItem key={d.value} value={d.value}>
-                    {d.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="sql-mode">Action</Label>
+              <Select value={mode} onValueChange={(v) => setMode(v as Mode)}>
+                <SelectTrigger id="sql-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="append">Add to schema</SelectItem>
+                  <SelectItem value="replace">Replace schema</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="sql-dialect">Dialect</Label>
+              <Select value={dialect} onValueChange={(v) => setDialect(v as Dialect)}>
+                <SelectTrigger id="sql-dialect">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {DIALECTS.map((d) => (
+                    <SelectItem key={d.value} value={d.value}>
+                      {d.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="sql-source">SQL</Label>
@@ -125,14 +170,37 @@ export function ImportSqlDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="ghost" onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={handleImport} disabled={busy || !sql.trim()}>
-            {busy ? "Importing…" : "Import"}
+            {busy ? "Importing…" : mode === "append" ? "Add to schema" : "Replace schema"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Return table ids (`schema.name`) that exist in BOTH `currentDbml` and
+ * `importedDbml`. Both are parsed via the project parser; an unparseable
+ * `currentDbml` is treated as having no tables (a safe lower bound — at
+ * worst the merge produces a duplicate the parser will then surface).
+ */
+function findTableConflicts(currentDbml: string, importedDbml: string): string[] {
+  const cur = parseDbml(currentDbml);
+  const imp = parseDbml(importedDbml);
+  if (!cur.ok || !imp.ok) return [];
+  const existing = new Set(cur.schema.tables.map((t) => t.id));
+  return imp.schema.tables
+    .filter((t) => existing.has(t.id))
+    .map((t) => t.name);
+}
+
+function tableCountLabel(dbml: string): string {
+  const r = parseDbml(dbml);
+  if (!r.ok) return "tables";
+  const n = r.schema.tables.length;
+  return `${n} table${n === 1 ? "" : "s"}`;
 }

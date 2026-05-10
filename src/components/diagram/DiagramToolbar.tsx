@@ -6,6 +6,7 @@ import {
   Image as ImageIcon,
   LayoutGrid,
   Maximize,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ interface Props {
 
 export function DiagramToolbar({ flowRef }: Props) {
   const { fitView } = useReactFlow();
+  const canEdit = useSchemaStore((s) => s.canEdit);
 
   useEffect(() => {
     return register(
@@ -153,6 +155,21 @@ export function DiagramToolbar({ flowRef }: Props) {
         <TooltipContent side="bottom">Fit to view</TooltipContent>
       </Tooltip>
       <div className="mx-0.5 h-5 w-px bg-border" />
+      {canEdit && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="gap-1.5 px-2"
+              onClick={() => run("schema.importSql")}
+            >
+              <Upload className="size-3.5" /> Import
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Import SQL DDL</TooltipContent>
+        </Tooltip>
+      )}
       <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
